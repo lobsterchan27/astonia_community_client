@@ -1,0 +1,16 @@
+[package]
+name = "astonia-gateway"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "astonia_gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "astonia-gateway"
+path = "src/main.rs"
+
+[dependencies]
+tungstenite = "0.29.0"
