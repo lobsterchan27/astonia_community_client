@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Astonia Browser Shell</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+    <script type="module" src="./src/main.js"></script>
+  </head>
+  <body>
+    <main class="shell" aria-labelledby="app-title">
+      <section class="status-panel" aria-label="Client status">
+        <p class="eyebrow">Community client</p>
+        <h1 id="app-title">Astonia Browser Shell</h1>
+        <div class="status-grid">
+          <article class="status-card" data-testid="webgpu-status" data-webgpu-state="checking">
+            <div class="status-row">
+              <span class="status-light" aria-hidden="true"></span>
+              <div>
+                <h2 data-webgpu-title>Checking WebGPU</h2>
+                <p data-webgpu-detail>Preparing the browser renderer capability probe.</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
