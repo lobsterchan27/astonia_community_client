@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "fixture_name": "tiny-login-tick",
+  "capture_kind": "synthetic",
+  "protocol_version": 3,
+  "target_host": "127.0.0.1",
+  "target_port": 5556,
+  "gateway_url": "ws://127.0.0.1:8787",
+  "server_commit": "synthetic",
+  "client_commit": "09fdff8f90d37b2407af09574176883092e33d5a",
+  "capture_command": "node tools/protocol-fixture.mjs check fixtures/protocol/tiny-login-tick",
+  "created_at": "2026-06-11T00:00:00.000Z",
+  "account": {
+    "username": "FixtureCapture",
+    "character": "FixtureCapture",
+    "password": "<redacted>"
+  },
+  "artifacts": {
+    "raw_stream": "raw-stream.ndjson",
+    "ticks": "ticks.ndjson"
+  }
+}
