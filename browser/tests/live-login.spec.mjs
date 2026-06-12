@@ -713,3 +713,164 @@ test('live session does not replay buffered ticks after the gateway closes', asy
     activeTimerCount: 0
   });
 });
+
+test('live session ignores decoded ticks that finish after the gateway closes', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const { AstoniaLiveSession } = await import('/src/live-session.js');
+    let socket;
+    let resolveDecode;
+    let decodeStarted = false;
+    let timerId = 0;
+    const timers = [];
+    const decodePromise = new Promise((resolve) => {
+      resolveDecode = resolve;
+    });
+
+    function emptySnapshot(ticks) {
+      return {
+        protocolVersion: null,
+        currentTick: ticks,
+        login: { done: true, doneCount: ticks },
+        origin: null,
+        position: null,
+        player: null,
+        playersById: {},
+        carriedItem: null,
+        textMessages: [],
+        visibleWorld: {
+          width: 0,
+          height: 0,
+          distance: 0,
+          updatedCells: 0,
+          nonEmptyCells: 0,
+          bounds: null,
+          layers: {},
+          cells: [],
+          characters: []
+        },
+        commands: {
+          modeled: { total: 0, byCommand: {} },
+          skipped: { total: 0, byCommand: {} }
+        },
+        ticksReplayed: ticks
+      };
+    }
+
+    async function waitFor(predicate) {
+      const startedAt = Date.now();
+      while (!predicate()) {
+        if (Date.now() - startedAt > 1000) {
+          throw new Error('Timed out waiting for condition');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    class ManualWebSocket extends EventTarget {
+      static CLOSING = 2;
+
+      constructor() {
+        super();
+        this.binaryType = '';
+        this.readyState = 1;
+      }
+
+      send() {}
+
+      close() {
+        this.readyState = 3;
+        this.dispatchEvent(new CloseEvent('close', { code: 1000 }));
+      }
+
+      receive(bytes) {
+        this.dispatchEvent(new MessageEvent('message', { data: Uint8Array.from(bytes).buffer }));
+      }
+    }
+
+    const replay = {
+      ticks: 0,
+      replayTick() {
+        this.ticks += 1;
+      },
+      snapshot() {
+        return emptySnapshot(this.ticks);
+      }
+    };
+
+    const session = new AstoniaLiveSession({
+      decoderFactory: () => ({
+        async pushChunk() {
+          decodeStarted = true;
+          return decodePromise;
+        }
+      }),
+      replayFactory: () => replay,
+      webSocketFactory: () => {
+        socket = new ManualWebSocket();
+        return socket;
+      },
+      setTimeout: (callback, delayMs) => {
+        const timer = { id: ++timerId, callback, delayMs, active: true };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimeout: (timer) => {
+        timer.active = false;
+      },
+      tickBufferOptions: {
+        fallbackTickIntervalMs: 50,
+        maxInitialHoldMs: 50
+      }
+    });
+
+    session.connect({
+      gatewayUrl: 'ws://close-during-decode.gateway.test',
+      username: 'FixtureCapture',
+      password: 'fixturecapture'
+    });
+    socket.dispatchEvent(new Event('open'));
+    socket.receive([1, 2, 3]);
+    await waitFor(() => decodeStarted);
+
+    socket.close();
+    const afterClose = {
+      status: session.state.status,
+      decodedTicks: session.state.decodedTicks,
+      lastVisibleUpdate: session.state.lastVisibleUpdate,
+      replayTicks: replay.ticks,
+      activeTimerCount: timers.filter((timer) => timer.active).length
+    };
+
+    resolveDecode([{ payload: new Uint8Array([43]), rawLength: 3 }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    return {
+      afterClose,
+      afterDecode: {
+        status: session.state.status,
+        decodedTicks: session.state.decodedTicks,
+        lastVisibleUpdate: session.state.lastVisibleUpdate,
+        replayTicks: replay.ticks,
+        activeTimerCount: timers.filter((timer) => timer.active).length
+      }
+    };
+  });
+
+  expect(result.afterClose).toMatchObject({
+    status: 'closed-before-ticks',
+    decodedTicks: 0,
+    lastVisibleUpdate: null,
+    replayTicks: 0,
+    activeTimerCount: 0
+  });
+  expect(result.afterDecode).toMatchObject({
+    status: 'closed-before-ticks',
+    decodedTicks: 0,
+    lastVisibleUpdate: null,
+    replayTicks: 0,
+    activeTimerCount: 0
+  });
+});

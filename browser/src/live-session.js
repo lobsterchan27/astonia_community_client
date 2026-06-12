@@ -171,7 +171,7 @@ export class AstoniaLiveSession extends EventTarget {
       }
 
       const bytes = await webSocketDataToBytes(data);
-      if (!this.#isCurrentSocket(socket)) {
+      if (!this.#isOpenSocket(socket)) {
         return;
       }
 
@@ -188,7 +188,7 @@ export class AstoniaLiveSession extends EventTarget {
       const decodeStartedAt = this.#now();
       const ticks = await decoder.pushChunk(bytes);
       const decodeMs = this.#now() - decodeStartedAt;
-      if (!this.#isCurrentSocket(socket) || decoder !== this.#decoder || replay !== this.#replay || tickBuffer !== this.#tickBuffer) {
+      if (!this.#isOpenSocket(socket) || decoder !== this.#decoder || replay !== this.#replay || tickBuffer !== this.#tickBuffer) {
         return;
       }
       tickBuffer.recordDecodeTiming(decodeMs);
@@ -305,6 +305,10 @@ export class AstoniaLiveSession extends EventTarget {
 
   #isCurrentSocket(socket) {
     return socket === this.#socket;
+  }
+
+  #isOpenSocket(socket) {
+    return this.#isCurrentSocket(socket) && socket.readyState === 1;
   }
 
   #emitChange() {
