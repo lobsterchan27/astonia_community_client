@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 const browserRoot = fileURLToPath(new URL('..', import.meta.url));
+const distModulePath = resolve(browserRoot, 'dist/astonia-client.js');
+const distDataPath = resolve(browserRoot, 'dist/astonia-client.data');
 
 function collectBrowserFailures(page) {
   const failures = [];
@@ -80,6 +82,50 @@ test('host reports WebGPU and native module status', async ({ page }) => {
   expect(moduleText).toMatch(/(Build Required|Native Module Ready)/);
 
   expect(failures).toEqual([]);
+});
+
+test('generated native module can read packaged resource filesystem', async ({ page }) => {
+	if (!existsSync(distModulePath)) {
+		test.skip(true, 'native WASM module has not been built');
+	}
+
+	expect(existsSync(distDataPath)).toBe(true);
+
+	const failures = collectBrowserFailures(page);
+	await page.goto('/');
+
+	const result = await page.evaluate(async () => {
+		const imported = await import(`/dist/astonia-client.js?t=${Date.now()}`);
+		const createModule = imported.default ?? imported.createAstoniaClientModule;
+		const logs = [];
+		const module = await createModule({
+			noInitialRun: true,
+			canvas: document.querySelector('[data-testid="wasm-client-canvas"]'),
+			locateFile(path) {
+				return `/dist/${path}`;
+			},
+			print(message) {
+				logs.push(String(message));
+			},
+			printErr(message) {
+				logs.push(String(message));
+			}
+		});
+
+		if (typeof module._astonia_resource_fs_check !== 'function') {
+			return { failures: -1, expected: 0, logs: ['resource filesystem export missing'] };
+		}
+
+		return {
+			failures: module._astonia_resource_fs_check(),
+			expected: module._astonia_resource_fs_expected_count(),
+			logs
+		};
+	});
+
+	expect(result.expected).toBeGreaterThanOrEqual(10);
+	expect(result.failures, result.logs.join('\n')).toBe(0);
+	expect(failures).toEqual([]);
 });
 
 test('browser package only contains the WASM/WebGPU host source', () => {
