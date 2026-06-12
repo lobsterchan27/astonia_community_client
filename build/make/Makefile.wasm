@@ -1,0 +1,30 @@
+.PHONY: all check-env clean
+
+OUT_DIR ?= browser/dist
+TARGET_JS := $(OUT_DIR)/astonia-client.js
+
+EMCC ?= emcc
+
+WASM_FLAGS := \
+	-sUSE_WEBGPU=1 \
+	-sMODULARIZE=1 \
+	-sEXPORT_ES6=1 \
+	-sEXPORT_NAME=createAstoniaClientModule \
+	-sALLOW_MEMORY_GROWTH=1 \
+	-sMAXIMUM_MEMORY=1GB \
+	-sNO_EXIT_RUNTIME=1
+
+all: check-env
+	@mkdir -p $(OUT_DIR)
+	@echo "WASM/WebGPU build target is intentionally not wired to any alternate browser renderer."
+	@echo "Next required slice: compile native client sources with a WebGPU renderer backend and browser astonia_net shim."
+	@echo "Expected output: $(TARGET_JS)"
+	@exit 2
+
+check-env:
+	@bash scripts/check-wasm-webgpu-env.sh
+
+clean:
+	@rm -rf $(OUT_DIR)
+	@mkdir -p $(OUT_DIR)
+	@printf '*\n!.gitignore\n' > $(OUT_DIR)/.gitignore
