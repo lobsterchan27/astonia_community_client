@@ -15,11 +15,20 @@ const DIST_ARTIFACTS = [
   }
 ];
 const DIST_MODULE = DIST_ARTIFACTS[0].url;
+const AUDIO_NATIVE_STATE = {
+  unavailable: 0,
+  locked: 1,
+  ready: 2
+};
 
 const elements = {
   form: document.querySelector('[data-testid="wasm-launch-form"]'),
   canvas: document.querySelector('[data-testid="wasm-client-canvas"]'),
   launchButton: document.querySelector('[data-testid="wasm-launch-form"] button[type="submit"]'),
+  audioStatus: document.querySelector('[data-testid="audio-status"]'),
+  audioTitle: document.querySelector('[data-audio-title]'),
+  audioDetail: document.querySelector('[data-audio-detail]'),
+  audioUnlockButton: document.querySelector('[data-testid="audio-unlock-button"]'),
   webgpuStatus: document.querySelector('[data-testid="webgpu-status"]'),
   webgpuTitle: document.querySelector('[data-webgpu-title]'),
   webgpuDetail: document.querySelector('[data-webgpu-detail]'),
@@ -33,6 +42,9 @@ let webgpuAvailable = false;
 let artifactSetReady = false;
 let launchOwner = null;
 let launchSequence = 0;
+let audioContext = null;
+let audioState = 'unavailable';
+let audioUnlockAttempt = null;
 
 const LAUNCH_PROBE_PREFIX = '[DEBUG-wasm-launch-probe]';
 
@@ -149,6 +161,108 @@ function setModuleStatus(state, title, detail) {
   elements.moduleStatus.dataset.moduleState = state;
   elements.moduleTitle.textContent = title;
   elements.moduleDetail.textContent = detail;
+}
+
+function audioContextConstructor() {
+  return window.AudioContext ?? window.webkitAudioContext ?? null;
+}
+
+function setAudioStatus(state, title, detail) {
+  const previousAudioState = audioState;
+
+  audioState = state;
+  elements.audioStatus.dataset.audioState = state;
+  elements.audioTitle.textContent = title;
+  elements.audioDetail.textContent = detail;
+
+  elements.audioUnlockButton.disabled = state !== 'locked';
+  elements.audioUnlockButton.textContent =
+    state === 'ready' ? 'Audio Ready' : state === 'unavailable' ? 'Unavailable' : 'Unlock Audio';
+  if (previousAudioState !== state) {
+    reportNativeAudioState(window.astoniaNativeModule);
+  }
+}
+
+function updateAudioStatusFromPlatform(detailOverride = null) {
+  if (!audioContextConstructor()) {
+    setAudioStatus(
+      'unavailable',
+      'Audio Unavailable',
+      detailOverride ?? 'This browser session does not expose Web Audio.'
+    );
+    return;
+  }
+
+  if (audioContext?.state === 'running') {
+    setAudioStatus(
+      'ready',
+      'Audio Ready',
+      detailOverride ?? 'Browser audio is unlocked for native playback.'
+    );
+    return;
+  }
+
+  setAudioStatus(
+    'locked',
+    'Audio Locked',
+    detailOverride ?? 'Unlock from a browser gesture before native sound can play.'
+  );
+}
+
+function isAudioUnlockGesture(event) {
+  if (!event?.isTrusted) {
+    return false;
+  }
+
+  return navigator.userActivation?.isActive !== false;
+}
+
+async function unlockAudioFromGesture(event) {
+  if (!isAudioUnlockGesture(event)) {
+    return audioState;
+  }
+
+  if (audioUnlockAttempt) {
+    return audioUnlockAttempt;
+  }
+
+  audioUnlockAttempt = (async () => {
+    const AudioContextCtor = audioContextConstructor();
+    if (!AudioContextCtor) {
+      updateAudioStatusFromPlatform();
+      return audioState;
+    }
+
+    try {
+      if (!audioContext || audioContext.state === 'closed') {
+        audioContext = new AudioContextCtor();
+        audioContext.addEventListener?.('statechange', () => updateAudioStatusFromPlatform());
+      }
+
+      if (audioContext.state === 'suspended' && typeof audioContext.resume === 'function') {
+        await audioContext.resume();
+      }
+
+      updateAudioStatusFromPlatform();
+    } catch (error) {
+      updateAudioStatusFromPlatform(error instanceof Error ? error.message : String(error));
+    }
+
+    return audioState;
+  })();
+
+  try {
+    return await audioUnlockAttempt;
+  } finally {
+    audioUnlockAttempt = null;
+  }
+}
+
+function reportNativeAudioState(module) {
+  const report = module?._astonia_wasm_audio_report_browser_state;
+  if (typeof report === 'function') {
+    report(AUDIO_NATIVE_STATE[audioState] ?? AUDIO_NATIVE_STATE.unavailable);
+  }
 }
 
 function updateLaunchAvailability() {
@@ -305,6 +419,10 @@ async function startNativeClient(event) {
     return;
   }
 
+  if (audioUnlockAttempt) {
+    await audioUnlockAttempt;
+  }
+
   const owner = {
     id: ++launchSequence,
     aborted: false,
@@ -379,10 +497,14 @@ async function startNativeClient(event) {
       throw new Error('Emscripten module factory export not found.');
     }
 
-    recordLaunchProbe('create-module-start', { arguments: redactLaunchArgs(owner.arguments) }, owner);
-    const module = await createModule({
+    const moduleConfig = {
       canvas: owner.canvas,
       arguments: owner.arguments,
+      preRun: [
+        () => {
+          reportNativeAudioState(moduleConfig);
+        }
+      ],
       locateFile(path) {
         const located = `/dist/${path}`;
         recordLaunchProbe('callback:locateFile', { path, located }, owner);
@@ -430,7 +552,10 @@ async function startNativeClient(event) {
           updateLaunchAvailability();
         }
       }
-    });
+    };
+
+    recordLaunchProbe('create-module-start', { arguments: redactLaunchArgs(owner.arguments) }, owner);
+    const module = await createModule(moduleConfig);
 
     if (owner.aborted) {
       recordLaunchProbe('create-module-resolved-after-abort', {}, owner);
@@ -439,6 +564,7 @@ async function startNativeClient(event) {
 
     owner.module = module;
     window.astoniaNativeModule = module;
+    reportNativeAudioState(module);
     recordLaunchProbe(
       'create-module-resolved',
       {
@@ -475,7 +601,10 @@ function initializeForm() {
   elements.form.gateway.value = defaultGateway();
   elements.form.username.value = DEFAULT_USER;
   elements.form.password.value = DEFAULT_PASSWORD;
+  elements.launchButton.addEventListener('click', unlockAudioFromGesture);
   elements.form.addEventListener('submit', startNativeClient);
+  elements.audioUnlockButton.addEventListener('click', unlockAudioFromGesture);
+  updateAudioStatusFromPlatform();
 }
 
 initializeForm();

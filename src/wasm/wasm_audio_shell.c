@@ -1,7 +1,8 @@
 /*
  * Part of Astonia Client (c) Daniel Brockhaus. Please read license.txt.
  *
- * WASM audio no-op shell. Browser audio behavior is intentionally deferred.
+ * WASM audio capability shell. Browser audio unlock is platform-owned; native
+ * code owns sound IDs, timing, volume, pan, and playback decisions.
  */
 
 #if !defined(__EMSCRIPTEN__)
@@ -10,13 +11,49 @@
 
 #include "astonia.h"
 #include "sdl/sdl.h"
+#include "wasm/wasm_audio_shell.h"
 
-int sound_volume = 0;
+int sound_volume = 128;
+
+static int browser_audio_state = ASTONIA_WASM_AUDIO_LOCKED;
+
+static int normalize_audio_state(int state)
+{
+	switch (state) {
+	case ASTONIA_WASM_AUDIO_UNAVAILABLE:
+	case ASTONIA_WASM_AUDIO_LOCKED:
+	case ASTONIA_WASM_AUDIO_READY:
+		return state;
+	default:
+		return ASTONIA_WASM_AUDIO_UNAVAILABLE;
+	}
+}
+
+void astonia_wasm_audio_report_browser_state(int state)
+{
+	browser_audio_state = normalize_audio_state(state);
+	if (browser_audio_state == ASTONIA_WASM_AUDIO_UNAVAILABLE) {
+		game_options &= ~GO_SOUND;
+	}
+}
+
+int astonia_wasm_audio_state(void)
+{
+	return browser_audio_state;
+}
 
 int init_sound(void)
 {
-	game_options &= ~GO_SOUND;
-	return -1;
+	if (!(game_options & GO_SOUND)) {
+		return -1;
+	}
+
+	if (browser_audio_state == ASTONIA_WASM_AUDIO_UNAVAILABLE) {
+		game_options &= ~GO_SOUND;
+		return -1;
+	}
+
+	return browser_audio_state == ASTONIA_WASM_AUDIO_READY ? 0 : -1;
 }
 
 void sound_exit(void)
@@ -79,7 +116,17 @@ DLL_EXPORT void sound_fade(int channel, float target, int duration)
 
 DLL_EXPORT float sound_get_master_volume(void)
 {
-	return 0.0f;
+	if (!sound_is_enabled()) {
+		return 0.0f;
+	}
+
+	if (sound_volume < 0) {
+		return 0.0f;
+	}
+	if (sound_volume > 128) {
+		return 1.0f;
+	}
+	return (float)sound_volume / 128.0f;
 }
 
 DLL_EXPORT int sound_is_playing(int channel)
@@ -90,7 +137,7 @@ DLL_EXPORT int sound_is_playing(int channel)
 
 DLL_EXPORT int sound_is_enabled(void)
 {
-	return 0;
+	return (game_options & GO_SOUND) && browser_audio_state == ASTONIA_WASM_AUDIO_READY ? 1 : 0;
 }
 
 void sound_fade_tick(void)

@@ -120,6 +120,12 @@ h1 {
   }
 }
 
+@media (min-width: 1040px) {
+  .status-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 .status-card {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr);
@@ -130,6 +136,43 @@ h1 {
   border-radius: 8px;
   background: #181c1e;
   padding: 14px;
+}
+
+.status-card-with-action {
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.status-card-with-action .status-light {
+  align-self: start;
+}
+
+.status-card-with-action button {
+  min-height: 34px;
+  border: 1px solid #4b575b;
+  border-radius: 6px;
+  background: #22282a;
+  color: #f2f5f3;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.status-card-with-action button:disabled {
+  color: #9aa5a0;
+  cursor: default;
+}
+
+@media (max-width: 520px) {
+  .status-card-with-action {
+    grid-template-columns: 14px minmax(0, 1fr);
+  }
+
+  .status-card-with-action button {
+    grid-column: 2;
+    justify-self: start;
+  }
 }
 
 .status-light {
@@ -143,7 +186,8 @@ h1 {
 
 .status-card[data-webgpu-state="available"] .status-light,
 .status-card[data-module-state="ready"] .status-light,
-.status-card[data-module-state="running"] .status-light {
+.status-card[data-module-state="running"] .status-light,
+.status-card[data-audio-state="ready"] .status-light {
   background: #55d17c;
   box-shadow: 0 0 0 4px rgba(85, 209, 124, 0.16);
 }
@@ -152,7 +196,8 @@ h1 {
 .status-card[data-webgpu-state="error"] .status-light,
 .status-card[data-module-state="build-required"] .status-light,
 .status-card[data-module-state="aborted"] .status-light,
-.status-card[data-module-state="error"] .status-light {
+.status-card[data-module-state="error"] .status-light,
+.status-card[data-audio-state="unavailable"] .status-light {
   background: #f0745e;
   box-shadow: 0 0 0 4px rgba(240, 116, 94, 0.16);
 }

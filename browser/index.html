@@ -46,6 +46,14 @@
             <p data-module-detail>Looking for the compiled WASM client.</p>
           </div>
         </article>
+        <article class="status-card status-card-with-action" data-testid="audio-status" data-audio-state="checking">
+          <span class="status-light" aria-hidden="true"></span>
+          <div>
+            <h2 data-audio-title>Checking Audio</h2>
+            <p data-audio-detail>Checking browser audio capability.</p>
+          </div>
+          <button type="button" data-testid="audio-unlock-button">Unlock Audio</button>
+        </article>
       </section>
 
       <section class="client-stage" aria-label="Native client">
