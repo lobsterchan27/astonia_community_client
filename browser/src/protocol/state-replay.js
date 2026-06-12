@@ -654,10 +654,31 @@ export class AstoniaProtocolStateReplay {
         character: nonEmptyCells.filter((cell) => cell.character).length,
         effects: nonEmptyCells.filter(hasEffects).length
       },
+      cells: nonEmptyCells
+        .sort((left, right) => left.index - right.index)
+        .map((cell) => this.#cellSnapshot(cell)),
       characters: nonEmptyCells
         .filter((cell) => cell.character)
         .sort((left, right) => left.index - right.index)
         .map((cell) => this.#characterSnapshot(cell, playersById))
+    };
+  }
+
+  #cellSnapshot(cell) {
+    const local = localPoint(cell.index, this.#width);
+
+    return {
+      index: cell.index,
+      local,
+      world: this.#worldPoint(local),
+      groundSpriteId: cell.groundSpriteId ?? 0,
+      groundOverlaySpriteId: cell.groundOverlaySpriteId ?? 0,
+      floorSpriteId: cell.floorSpriteId ?? 0,
+      floorOverlaySpriteId: cell.floorOverlaySpriteId ?? 0,
+      itemSpriteId: cell.itemSpriteId ?? 0,
+      itemColors: cell.itemColors ? [...cell.itemColors] : null,
+      flags: cell.flags ?? 0,
+      effects: cell.effects ? [...cell.effects] : [0, 0, 0, 0]
     };
   }
 
