@@ -7,6 +7,8 @@ const browserRoot = fileURLToPath(new URL('..', import.meta.url));
 const distModulePath = resolve(browserRoot, 'dist/astonia-client.js');
 const distDataPath = resolve(browserRoot, 'dist/astonia-client.data');
 const artifactPattern = /\/dist\/astonia-client\.(js|wasm|data)(?:\?.*)?$/;
+const ASTONIA_NATIVE_CLIENT_SHOW_USAGE = 1;
+const ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED = -5;
 
 const launchCaptureModuleSource = `
 window.nativeLaunchCalls = window.nativeLaunchCalls || [];
@@ -114,12 +116,138 @@ function browserHostSourceFiles() {
 
 async function installMockWebGpu(page) {
   await page.addInitScript(() => {
+    const limits = {
+      maxTextureDimension1D: 8192,
+      maxTextureDimension2D: 8192,
+      maxTextureDimension3D: 2048,
+      maxTextureArrayLayers: 256,
+      maxBindGroups: 4,
+      maxBindGroupsPlusVertexBuffers: 24,
+      maxBindingsPerBindGroup: 1000,
+      maxDynamicUniformBuffersPerPipelineLayout: 8,
+      maxDynamicStorageBuffersPerPipelineLayout: 4,
+      maxSampledTexturesPerShaderStage: 16,
+      maxSamplersPerShaderStage: 16,
+      maxStorageBuffersPerShaderStage: 8,
+      maxStorageTexturesPerShaderStage: 4,
+      maxUniformBuffersPerShaderStage: 12,
+      minUniformBufferOffsetAlignment: 256,
+      minStorageBufferOffsetAlignment: 256,
+      maxUniformBufferBindingSize: 65536,
+      maxStorageBufferBindingSize: 134217728,
+      maxVertexBuffers: 8,
+      maxBufferSize: 268435456,
+      maxVertexAttributes: 16,
+      maxVertexBufferArrayStride: 2048
+    };
+    const pass = {
+      setPipeline() {},
+      setBindGroup() {},
+      setVertexBuffer() {},
+      setIndexBuffer() {},
+      setBlendConstant() {},
+      setStencilReference() {},
+      draw() {},
+      drawIndexed() {},
+      end() {}
+    };
+    const texture = {
+      createView() {
+        return {};
+      },
+      destroy() {}
+    };
+    const commandEncoder = {
+      beginRenderPass() {
+        return pass;
+      },
+      beginComputePass() {
+        return pass;
+      },
+      finish() {
+        return {};
+      }
+    };
+    const device = {
+      features: new Set(),
+      limits,
+      queue: {
+        submit() {},
+        writeBuffer() {},
+        writeTexture() {}
+      },
+      lost: new Promise(() => {}),
+      createTexture() {
+        return texture;
+      },
+      createShaderModule() {
+        return {};
+      },
+      createBuffer(desc = {}) {
+        const size = Number(desc.size ?? 0);
+        return {
+          getMappedRange() {
+            return new ArrayBuffer(size);
+          },
+          unmap() {},
+          destroy() {}
+        };
+      },
+      createSampler() {
+        return {};
+      },
+      createBindGroupLayout() {
+        return {};
+      },
+      createBindGroup() {
+        return {};
+      },
+      createPipelineLayout() {
+        return {};
+      },
+      createRenderPipeline() {
+        return {};
+      },
+      createComputePipeline() {
+        return {};
+      },
+      createCommandEncoder() {
+        return commandEncoder;
+      },
+      destroy() {}
+    };
+    const adapter = {
+      features: new Set(),
+      limits,
+      async requestDevice() {
+        return device;
+      }
+    };
+    const nativeGetContext = HTMLCanvasElement.prototype.getContext;
+
+    HTMLCanvasElement.prototype.getContext = function getContext(type, ...args) {
+      if (type === 'webgpu') {
+        return {
+          canvas: this,
+          configure() {},
+          getCurrentTexture() {
+            return texture;
+          }
+        };
+      }
+
+      return nativeGetContext.call(this, type, ...args);
+    };
+
     Object.defineProperty(Navigator.prototype, 'gpu', {
       configurable: true,
       get() {
         return {
           async requestAdapter() {
-            return {};
+            return adapter;
+          },
+          getPreferredCanvasFormat() {
+            return 'bgra8unorm';
           }
         };
       }
@@ -485,7 +613,19 @@ test('generated native module exports native lifecycle entry points', async ({ p
 	expect(failures).toEqual([]);
 });
 
-test('generated native module exposes native startup adapter probes', async ({ page }) => {
+test('generated native module contains an invoked Sokol main path', () => {
+	if (!existsSync(distModulePath)) {
+		test.skip(true, 'native WASM module has not been built');
+	}
+
+	const source = readFileSync(distModulePath, 'utf8');
+
+	expect(source).toMatch(/\bcallMain\b/);
+	expect(source).toMatch(/Module\["_main"\]|wasmExports\["main"\]/);
+	expect(source).toMatch(/Module\["noInitialRun"\]/);
+});
+
+test('generated native module exposes native startup adapter probes without initial run', async ({ page }) => {
 	if (!existsSync(distModulePath)) {
 		test.skip(true, 'native WASM module has not been built');
 	}
@@ -556,6 +696,46 @@ test('generated native module exposes native startup adapter probes', async ({ p
 		wantHeight: 0,
 		threadCount: 0
 	});
+	expect(failures).toEqual([]);
+});
+
+test('host launch with the generated native module invokes the startup adapter entrypoint', async ({ page }) => {
+	if (!existsSync(distModulePath)) {
+		test.skip(true, 'native WASM module has not been built');
+	}
+
+	const failures = collectBrowserFailures(page);
+	await installMockWebGpu(page);
+	await page.goto('/?astonia_probe=1');
+
+	await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'ready');
+	await page.locator('input[name="username"]').fill('');
+	await page.locator('input[name="password"]').fill('');
+	await page.getByRole('button', { name: 'Launch' }).click();
+	await page.waitForFunction((runNotStarted) => {
+		const module = window.astoniaNativeModule;
+		return (
+			typeof module?._astonia_native_startup_adapter_status === 'function' &&
+			module._astonia_native_startup_adapter_startup_result() !== runNotStarted
+		);
+	}, ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED);
+
+	const result = await page.evaluate(() => {
+		const module = window.astoniaNativeModule;
+		return {
+			status: module._astonia_native_startup_adapter_status(),
+			startupResult: module._astonia_native_startup_adapter_startup_result(),
+			loopInitResult: module._astonia_native_startup_adapter_loop_init_result(),
+			shutdownCount: module._astonia_native_startup_adapter_shutdown_count(),
+			probeStages: window.astoniaWasmLaunchProbe.events.map((event) => event.stage)
+		};
+	});
+
+	expect(result.startupResult).toBe(ASTONIA_NATIVE_CLIENT_SHOW_USAGE);
+	expect(result.loopInitResult).toBe(ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED);
+	expect(result.status).not.toBe(0);
+	expect(result.shutdownCount).toBeGreaterThan(0);
+	expect(result.probeStages).toEqual(expect.arrayContaining(['create-module-start', 'create-module-resolved', 'running']));
 	expect(failures).toEqual([]);
 });
 
