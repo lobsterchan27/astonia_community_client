@@ -5,7 +5,11 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
-const nativeModulePath = resolve(rootDir, './dist/astonia-client.js');
+const nativeArtifactPaths = new Set([
+  resolve(rootDir, './dist/astonia-client.js'),
+  resolve(rootDir, './dist/astonia-client.wasm'),
+  resolve(rootDir, './dist/astonia-client.data')
+]);
 const contentTypes = new Map([
   ['.css', 'text/css; charset=utf-8'],
   ['.data', 'application/octet-stream'],
@@ -106,11 +110,12 @@ const server = createServer(async (req, res) => {
 
     createReadStream(filePath).pipe(res);
   } catch {
-    if (req.method === 'HEAD' && filePath === nativeModulePath) {
+    if (req.method === 'HEAD' && nativeArtifactPaths.has(filePath)) {
       res.writeHead(
         204,
         secureHeaders({
           'Cache-Control': 'no-store',
+          'X-Astonia-Artifact-Missing': '1',
           'X-Astonia-Module-Missing': '1'
         })
       );

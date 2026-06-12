@@ -1,10 +1,25 @@
 const DEFAULT_USER = 'BrowserSmoke';
 const DEFAULT_PASSWORD = 'fixturecapture';
-const DIST_MODULE = '/dist/astonia-client.js';
+const DIST_ARTIFACTS = [
+  {
+    url: '/dist/astonia-client.js',
+    name: 'browser/dist/astonia-client.js'
+  },
+  {
+    url: '/dist/astonia-client.wasm',
+    name: 'browser/dist/astonia-client.wasm'
+  },
+  {
+    url: '/dist/astonia-client.data',
+    name: 'browser/dist/astonia-client.data'
+  }
+];
+const DIST_MODULE = DIST_ARTIFACTS[0].url;
 
 const elements = {
   form: document.querySelector('[data-testid="wasm-launch-form"]'),
   canvas: document.querySelector('[data-testid="wasm-client-canvas"]'),
+  launchButton: document.querySelector('[data-testid="wasm-launch-form"] button[type="submit"]'),
   webgpuStatus: document.querySelector('[data-testid="webgpu-status"]'),
   webgpuTitle: document.querySelector('[data-webgpu-title]'),
   webgpuDetail: document.querySelector('[data-webgpu-detail]'),
@@ -15,7 +30,8 @@ const elements = {
 };
 
 let webgpuAvailable = false;
-let moduleLoading = false;
+let artifactSetReady = false;
+let launchOwner = null;
 
 function defaultGateway() {
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -41,6 +57,10 @@ function setModuleStatus(state, title, detail) {
   elements.moduleDetail.textContent = detail;
 }
 
+function updateLaunchAvailability() {
+  elements.launchButton.disabled = !webgpuAvailable || !artifactSetReady || launchOwner !== null;
+}
+
 async function checkWebGpu() {
   if (!('gpu' in navigator)) {
     webgpuAvailable = false;
@@ -49,6 +69,7 @@ async function checkWebGpu() {
       'WebGPU Unavailable',
       'This browser session cannot start the WASM/WebGPU client.'
     );
+    updateLaunchAvailability();
     return;
   }
 
@@ -61,6 +82,7 @@ async function checkWebGpu() {
         'WebGPU Unavailable',
         'No WebGPU adapter was granted for this browser session.'
       );
+      updateLaunchAvailability();
       return;
     }
 
@@ -69,24 +91,53 @@ async function checkWebGpu() {
   } catch (error) {
     webgpuAvailable = false;
     setWebGpuStatus('error', 'WebGPU Probe Failed', error instanceof Error ? error.message : String(error));
+  } finally {
+    updateLaunchAvailability();
   }
 }
 
-async function checkNativeModule() {
+async function probeArtifact(artifact) {
+  const response = await fetch(artifact.url, { method: 'HEAD', cache: 'no-store' });
+  const missingHeader =
+    response.headers.get('x-astonia-artifact-missing') === '1' ||
+    response.headers.get('x-astonia-module-missing') === '1';
+
+  if (missingHeader || response.status === 404) {
+    return artifact.name;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Probe for ${artifact.name} failed with HTTP ${response.status}.`);
+  }
+
+  return null;
+}
+
+async function checkNativeArtifacts() {
   try {
-    const response = await fetch(DIST_MODULE, { method: 'HEAD', cache: 'no-store' });
-    if (response.headers.get('x-astonia-module-missing') === '1' || !response.ok) {
+    const missingArtifacts = (await Promise.all(DIST_ARTIFACTS.map(probeArtifact))).filter(Boolean);
+
+    if (missingArtifacts.length > 0) {
+      artifactSetReady = false;
       setModuleStatus(
-        'missing',
-        'Build Required',
-        'Run the WASM/WebGPU native build to generate browser/dist/astonia-client.js.'
+        'build-required',
+        missingArtifacts.length === DIST_ARTIFACTS.length ? 'Build Required' : 'Incomplete Native Artifacts',
+        `Missing ${missingArtifacts.join(', ')}. Run the WASM/WebGPU native build to generate the browser/dist artifact set.`
       );
       return;
     }
 
-    setModuleStatus('ready', 'Native Module Ready', 'browser/dist/astonia-client.js is present.');
+    artifactSetReady = true;
+    setModuleStatus(
+      'ready',
+      'Native Module Ready',
+      'browser/dist/astonia-client.js, .wasm, and .data are present.'
+    );
   } catch (error) {
+    artifactSetReady = false;
     setModuleStatus('error', 'Module Probe Failed', error instanceof Error ? error.message : String(error));
+  } finally {
+    updateLaunchAvailability();
   }
 }
 
@@ -110,7 +161,7 @@ function collectLaunchArgs(form) {
 
 async function startNativeClient(event) {
   event.preventDefault();
-  if (moduleLoading) {
+  if (launchOwner !== null) {
     return;
   }
 
@@ -119,8 +170,26 @@ async function startNativeClient(event) {
     return;
   }
 
-  moduleLoading = true;
-  setModuleStatus('loading', 'Starting Native Module', 'Loading the compiled WASM/WebGPU client.');
+  if (!artifactSetReady) {
+    appendLog('The complete native browser artifact set is required before launch.');
+    return;
+  }
+
+  const owner = {
+    aborted: false,
+    arguments: collectLaunchArgs(elements.form),
+    canvas: elements.canvas,
+    module: null
+  };
+  launchOwner = owner;
+  updateLaunchAvailability();
+  setModuleStatus('loading', 'Loading Native Module', 'Loading the compiled WASM/WebGPU client.');
+
+  function setCurrentLoadingDetail(detail) {
+    if (launchOwner === owner && !owner.aborted) {
+      setModuleStatus('loading', 'Loading Native Module', detail);
+    }
+  }
 
   try {
     const moduleUrl = `${DIST_MODULE}?t=${Date.now()}`;
@@ -131,8 +200,8 @@ async function startNativeClient(event) {
     }
 
     const module = await createModule({
-      canvas: elements.canvas,
-      arguments: collectLaunchArgs(elements.form),
+      canvas: owner.canvas,
+      arguments: owner.arguments,
       locateFile(path) {
         return `/dist/${path}`;
       },
@@ -142,21 +211,48 @@ async function startNativeClient(event) {
       printErr(message) {
         appendLog(String(message));
       },
+      setStatus(message) {
+        setCurrentLoadingDetail(String(message || 'Preparing native runtime.'));
+      },
+      monitorRunDependencies(left) {
+        const count = Number(left);
+        const detail =
+          Number.isFinite(count) && count > 0
+            ? `Preparing native runtime (${count} run dependencies remaining).`
+            : 'Starting native runtime.';
+        setCurrentLoadingDetail(detail);
+      },
       onAbort(reason) {
-        appendLog(`Native module aborted: ${reason}`);
+        owner.aborted = true;
+        const detail = String(reason);
+        appendLog(`Native module aborted: ${detail}`);
+        if (launchOwner === owner) {
+          launchOwner = null;
+          setModuleStatus('aborted', 'Native Module Aborted', detail);
+          updateLaunchAvailability();
+        }
       }
     });
 
+    if (owner.aborted) {
+      return;
+    }
+
+    owner.module = module;
     window.astoniaNativeModule = module;
     setModuleStatus('running', 'Native Module Running', 'The real client owns the canvas.');
   } catch (error) {
-    setModuleStatus('error', 'Native Module Failed', error instanceof Error ? error.message : String(error));
+    if (!owner.aborted && launchOwner === owner) {
+      launchOwner = null;
+      setModuleStatus('error', 'Native Module Failed', error instanceof Error ? error.message : String(error));
+    }
   } finally {
-    moduleLoading = false;
+    updateLaunchAvailability();
   }
 }
 
 function initializeForm() {
+  elements.launchButton.disabled = true;
   elements.form.gateway.value = defaultGateway();
   elements.form.username.value = DEFAULT_USER;
   elements.form.password.value = DEFAULT_PASSWORD;
@@ -164,4 +260,4 @@ function initializeForm() {
 }
 
 initializeForm();
-await Promise.all([checkWebGpu(), checkNativeModule()]);
+await Promise.all([checkWebGpu(), checkNativeArtifacts()]);

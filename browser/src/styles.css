@@ -102,6 +102,12 @@ h1 {
   padding: 0 18px;
 }
 
+.launch-bar button:disabled {
+  background: #5f6661;
+  color: #c7d0cb;
+  cursor: not-allowed;
+}
+
 .status-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -144,7 +150,8 @@ h1 {
 
 .status-card[data-webgpu-state="unavailable"] .status-light,
 .status-card[data-webgpu-state="error"] .status-light,
-.status-card[data-module-state="missing"] .status-light,
+.status-card[data-module-state="build-required"] .status-light,
+.status-card[data-module-state="aborted"] .status-light,
 .status-card[data-module-state="error"] .status-light {
   background: #f0745e;
   box-shadow: 0 0 0 4px rgba(240, 116, 94, 0.16);
