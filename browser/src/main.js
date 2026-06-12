@@ -20,6 +20,122 @@ const AUDIO_NATIVE_STATE = {
   locked: 1,
   ready: 2
 };
+const SDL_KEYCODE = {
+  unknown: 0,
+  backspace: 8,
+  tab: 9,
+  return: 13,
+  escape: 27,
+  delete: 127,
+  capsLock: 0x40000039,
+  f1: 0x4000003a,
+  f2: 0x4000003b,
+  f3: 0x4000003c,
+  f4: 0x4000003d,
+  f5: 0x4000003e,
+  f6: 0x4000003f,
+  f7: 0x40000040,
+  f8: 0x40000041,
+  f9: 0x40000042,
+  f10: 0x40000043,
+  f11: 0x40000044,
+  f12: 0x40000045,
+  printScreen: 0x40000046,
+  scrollLock: 0x40000047,
+  pause: 0x40000048,
+  insert: 0x40000049,
+  home: 0x4000004a,
+  pageUp: 0x4000004b,
+  end: 0x4000004d,
+  pageDown: 0x4000004e,
+  right: 0x4000004f,
+  left: 0x40000050,
+  down: 0x40000051,
+  up: 0x40000052,
+  numLock: 0x40000053,
+  kpDivide: 0x40000054,
+  kpMultiply: 0x40000055,
+  kpMinus: 0x40000056,
+  kpPlus: 0x40000057,
+  kpEnter: 0x40000058,
+  kp1: 0x40000059,
+  kp2: 0x4000005a,
+  kp3: 0x4000005b,
+  kp4: 0x4000005c,
+  kp5: 0x4000005d,
+  kp6: 0x4000005e,
+  kp7: 0x4000005f,
+  kp8: 0x40000060,
+  kp9: 0x40000061,
+  kp0: 0x40000062,
+  kpPeriod: 0x40000063,
+  leftCtrl: 0x400000e0,
+  leftShift: 0x400000e1,
+  leftAlt: 0x400000e2,
+  rightCtrl: 0x400000e4,
+  rightShift: 0x400000e5,
+  rightAlt: 0x400000e6
+};
+const KEYCODE_BY_KEY = new Map([
+  ['Backspace', SDL_KEYCODE.backspace],
+  ['Tab', SDL_KEYCODE.tab],
+  ['Enter', SDL_KEYCODE.return],
+  ['Escape', SDL_KEYCODE.escape],
+  ['Delete', SDL_KEYCODE.delete],
+  ['CapsLock', SDL_KEYCODE.capsLock],
+  ['F1', SDL_KEYCODE.f1],
+  ['F2', SDL_KEYCODE.f2],
+  ['F3', SDL_KEYCODE.f3],
+  ['F4', SDL_KEYCODE.f4],
+  ['F5', SDL_KEYCODE.f5],
+  ['F6', SDL_KEYCODE.f6],
+  ['F7', SDL_KEYCODE.f7],
+  ['F8', SDL_KEYCODE.f8],
+  ['F9', SDL_KEYCODE.f9],
+  ['F10', SDL_KEYCODE.f10],
+  ['F11', SDL_KEYCODE.f11],
+  ['F12', SDL_KEYCODE.f12],
+  ['PrintScreen', SDL_KEYCODE.printScreen],
+  ['ScrollLock', SDL_KEYCODE.scrollLock],
+  ['Pause', SDL_KEYCODE.pause],
+  ['Insert', SDL_KEYCODE.insert],
+  ['Home', SDL_KEYCODE.home],
+  ['PageUp', SDL_KEYCODE.pageUp],
+  ['End', SDL_KEYCODE.end],
+  ['PageDown', SDL_KEYCODE.pageDown],
+  ['ArrowRight', SDL_KEYCODE.right],
+  ['ArrowLeft', SDL_KEYCODE.left],
+  ['ArrowDown', SDL_KEYCODE.down],
+  ['ArrowUp', SDL_KEYCODE.up],
+  ['NumLock', SDL_KEYCODE.numLock],
+  ['Control', SDL_KEYCODE.leftCtrl],
+  ['Shift', SDL_KEYCODE.leftShift],
+  ['Alt', SDL_KEYCODE.leftAlt]
+]);
+const KEYCODE_BY_CODE = new Map([
+  ['ControlLeft', SDL_KEYCODE.leftCtrl],
+  ['ControlRight', SDL_KEYCODE.rightCtrl],
+  ['ShiftLeft', SDL_KEYCODE.leftShift],
+  ['ShiftRight', SDL_KEYCODE.rightShift],
+  ['AltLeft', SDL_KEYCODE.leftAlt],
+  ['AltRight', SDL_KEYCODE.rightAlt],
+  ['NumpadDivide', SDL_KEYCODE.kpDivide],
+  ['NumpadMultiply', SDL_KEYCODE.kpMultiply],
+  ['NumpadSubtract', SDL_KEYCODE.kpMinus],
+  ['NumpadAdd', SDL_KEYCODE.kpPlus],
+  ['NumpadEnter', SDL_KEYCODE.kpEnter],
+  ['NumpadDecimal', SDL_KEYCODE.kpPeriod],
+  ['Numpad0', SDL_KEYCODE.kp0],
+  ['Numpad1', SDL_KEYCODE.kp1],
+  ['Numpad2', SDL_KEYCODE.kp2],
+  ['Numpad3', SDL_KEYCODE.kp3],
+  ['Numpad4', SDL_KEYCODE.kp4],
+  ['Numpad5', SDL_KEYCODE.kp5],
+  ['Numpad6', SDL_KEYCODE.kp6],
+  ['Numpad7', SDL_KEYCODE.kp7],
+  ['Numpad8', SDL_KEYCODE.kp8],
+  ['Numpad9', SDL_KEYCODE.kp9]
+]);
 
 const elements = {
   form: document.querySelector('[data-testid="wasm-launch-form"]'),
@@ -262,6 +378,121 @@ function reportNativeAudioState(module) {
   const report = module?._astonia_wasm_audio_report_browser_state;
   if (typeof report === 'function') {
     report(AUDIO_NATIVE_STATE[audioState] ?? AUDIO_NATIVE_STATE.unavailable);
+  }
+}
+
+function activeNativeInputModule() {
+  return launchOwner?.module ?? null;
+}
+
+function eventModifiers(event) {
+  return {
+    shift: event.shiftKey ? 1 : 0,
+    ctrl: event.ctrlKey ? 1 : 0,
+    alt: event.altKey ? 1 : 0
+  };
+}
+
+function reportNativeModifiers(module, modifiers) {
+  const report = module?._astonia_wasm_input_set_modifiers;
+  if (typeof report === 'function') {
+    report(modifiers.shift, modifiers.ctrl, modifiers.alt);
+  }
+}
+
+function editableTarget(target) {
+  if (!target || target === document || target === window) {
+    return false;
+  }
+
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) {
+    return true;
+  }
+
+  return target.isContentEditable === true;
+}
+
+function browserKeycode(event) {
+  if (KEYCODE_BY_CODE.has(event.code)) {
+    return KEYCODE_BY_CODE.get(event.code);
+  }
+
+  const letter = /^Key([A-Z])$/.exec(event.code);
+  if (letter) {
+    return letter[1].toLowerCase().codePointAt(0);
+  }
+
+  const digit = /^Digit([0-9])$/.exec(event.code);
+  if (digit) {
+    return digit[1].codePointAt(0);
+  }
+
+  if (KEYCODE_BY_KEY.has(event.key)) {
+    return KEYCODE_BY_KEY.get(event.key);
+  }
+
+  if (typeof event.key === 'string' && event.key.length === 1) {
+    const character = /^[A-Z]$/.test(event.key) ? event.key.toLowerCase() : event.key;
+    return character.codePointAt(0) ?? SDL_KEYCODE.unknown;
+  }
+
+  return SDL_KEYCODE.unknown;
+}
+
+function canProduceText(event) {
+  return (
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.isComposing &&
+    typeof event.key === 'string' &&
+    Array.from(event.key).length === 1
+  );
+}
+
+function forwardNativeKey(event, exportName) {
+  const module = activeNativeInputModule();
+  if (!module || editableTarget(event.target)) {
+    return;
+  }
+
+  const modifiers = eventModifiers(event);
+  reportNativeModifiers(module, modifiers);
+
+  const nativeInput = module[exportName];
+  const keycode = browserKeycode(event);
+  if (typeof nativeInput !== 'function' || keycode === SDL_KEYCODE.unknown) {
+    return;
+  }
+
+  nativeInput(keycode, modifiers.shift, modifiers.ctrl, modifiers.alt);
+  if (event.cancelable && (exportName !== '_astonia_wasm_input_key_down' || !canProduceText(event))) {
+    event.preventDefault();
+  }
+}
+
+function forwardNativeText(event) {
+  const module = activeNativeInputModule();
+  if (!module || editableTarget(event.target) || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) {
+    return;
+  }
+
+  const nativeInput = module._astonia_wasm_input_text;
+  if (typeof nativeInput !== 'function' || typeof event.key !== 'string' || event.key.length === 0 || event.key === 'Dead') {
+    return;
+  }
+
+  const characters = Array.from(event.key);
+  if (characters.length !== 1) {
+    return;
+  }
+
+  const modifiers = eventModifiers(event);
+  reportNativeModifiers(module, modifiers);
+  nativeInput(characters[0].codePointAt(0), modifiers.shift, modifiers.ctrl, modifiers.alt);
+
+  if (event.cancelable) {
+    event.preventDefault();
   }
 }
 
@@ -604,6 +835,9 @@ function initializeForm() {
   elements.launchButton.addEventListener('click', unlockAudioFromGesture);
   elements.form.addEventListener('submit', startNativeClient);
   elements.audioUnlockButton.addEventListener('click', unlockAudioFromGesture);
+  window.addEventListener('keydown', (event) => forwardNativeKey(event, '_astonia_wasm_input_key_down'));
+  window.addEventListener('keyup', (event) => forwardNativeKey(event, '_astonia_wasm_input_key_up'));
+  window.addEventListener('keypress', forwardNativeText);
   updateAudioStatusFromPlatform();
 }
 

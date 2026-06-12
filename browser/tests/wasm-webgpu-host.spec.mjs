@@ -566,6 +566,18 @@ test('browser package only contains the WASM/WebGPU host source', () => {
 test('browser host source stays inside platform-launch boundaries', () => {
   const forbiddenPatterns = [
     {
+      name: 'native protocol command constants',
+      pattern: /\bCMD_[A-Z0-9_]+\b/
+    },
+    {
+      name: 'native client send calls',
+      pattern: /\bclient_send\b/
+    },
+    {
+      name: 'client command packet construction',
+      pattern: /\b(?:build|encode|write|construct)(?:Client|Native|Protocol)?(?:Command|Packet)\b/i
+    },
+    {
       name: 'protocol decoding',
       pattern: /\b(decodePacket|parsePacket|packetOpcode|protocolOpcode|tickReplay|replayTick)\b/i
     },
