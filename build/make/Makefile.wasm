@@ -1,12 +1,37 @@
-.PHONY: all check-env clean
+.PHONY: all check-env renderer-contract-check clean
 
 OUT_DIR ?= browser/dist
 TARGET_JS := $(OUT_DIR)/astonia-client.js
 
-EMCC ?= emcc
+LOCAL_EMSDK_ROOT ?= $(if $(ASTONIA_EMSDK_ROOT),$(ASTONIA_EMSDK_ROOT),$(CURDIR)/.deps/emsdk)
+LOCAL_EMCC := $(LOCAL_EMSDK_ROOT)/upstream/emscripten/emcc
+
+EMCC ?= $(if $(wildcard $(LOCAL_EMCC)),$(LOCAL_EMCC),emcc)
+HOST_CC ?= clang
+
+SOKOL_DIR := third_party/sokol
+WASM_SRCS := \
+	src/wasm/sokol_webgpu_harness.c \
+	src/wasm/sokol_sdl_renderer.c \
+	src/render_backend/sokol_webgpu_backend.c \
+	src/render_backend/sokol_webgpu_sokol.c
+
+WASM_CFLAGS := \
+	-std=c99 \
+	-O2 \
+	-Wall \
+	-Wextra \
+	-Wpedantic \
+	-Werror \
+	-DNDEBUG \
+	-DSOKOL_WGPU \
+	-Iinclude \
+	-Isrc \
+	-isystem $(SOKOL_DIR)
 
 WASM_FLAGS := \
-	-sUSE_WEBGPU=1 \
+	--use-port=emdawnwebgpu \
+	-sENVIRONMENT=web \
 	-sMODULARIZE=1 \
 	-sEXPORT_ES6=1 \
 	-sEXPORT_NAME=createAstoniaClientModule \
@@ -14,17 +39,25 @@ WASM_FLAGS := \
 	-sMAXIMUM_MEMORY=1GB \
 	-sNO_EXIT_RUNTIME=1
 
-all: check-env
+all: check-env $(TARGET_JS)
+
+$(TARGET_JS): $(WASM_SRCS) src/render_backend/render_backend.h src/render_backend/sokol_webgpu_backend.h \
+		$(SOKOL_DIR)/sokol_app.h $(SOKOL_DIR)/sokol_gfx.h $(SOKOL_DIR)/sokol_glue.h $(SOKOL_DIR)/sokol_log.h
 	@mkdir -p $(OUT_DIR)
-	@echo "WASM/WebGPU build target is intentionally not wired to any alternate browser renderer."
-	@echo "Next required slice: compile native client sources with a Sokol WebGPU renderer backend and browser astonia_net shim."
-	@echo "Expected output: $(TARGET_JS)"
-	@exit 2
+	$(EMCC) $(WASM_CFLAGS) $(WASM_SRCS) -o $(TARGET_JS) $(WASM_FLAGS)
+	@echo "Built Sokol WebGPU renderer harness: $(TARGET_JS)"
 
 check-env:
-	@bash scripts/check-wasm-webgpu-env.sh
+	@ASTONIA_EMSDK_ROOT="$(LOCAL_EMSDK_ROOT)" bash scripts/check-wasm-webgpu-env.sh
+
+renderer-contract-check:
+	@mkdir -p bin
+	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -Wpedantic -Werror -Isrc tests/test_renderer_backend_contract.c \
+		-o bin/test_renderer_backend_contract
+	@./bin/test_renderer_backend_contract
 
 clean:
 	@rm -rf $(OUT_DIR)
 	@mkdir -p $(OUT_DIR)
 	@printf '*\n!.gitignore\n' > $(OUT_DIR)/.gitignore
+	@rm -f bin/test_renderer_backend_contract

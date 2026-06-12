@@ -59,8 +59,9 @@ TEST_CONCURRENT = $(BIN_DIR)/test_concurrent
 TEST_HASH_DIAG = $(BIN_DIR)/test_hash_distribution
 TEST_RENDER_PRIMS = $(BIN_DIR)/test_render_primitives
 TEST_SPRITE_CONFIG = $(BIN_DIR)/test_sprite_config
+TEST_RENDERER_BACKEND_CONTRACT = $(BIN_DIR)/test_renderer_backend_contract
 
-all: $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_CONFIG)
+all: $(TEST_RENDERER_BACKEND_CONTRACT) $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_CONFIG)
 test: run
 
 $(TEST_SERIALIZED): test_texture_cache.c $(ALL_SRCS)
@@ -85,6 +86,10 @@ SPRITE_CONFIG_SRCS = ../src/game/sprite_config.c ../src/lib/cjson/cJSON.c
 $(TEST_SPRITE_CONFIG): test_sprite_config.c $(SPRITE_CONFIG_SRCS)
 	@mkdir -p $(BIN_DIR)
 	$(CC) -O2 -g -Wall -Wextra -Wpedantic -Wno-unused-parameter -DUNIT_TEST -I../src $^ -o $@
+
+$(TEST_RENDERER_BACKEND_CONTRACT): test_renderer_backend_contract.c ../src/render_backend/render_backend.h
+	@mkdir -p $(BIN_DIR)
+	$(CC) -O2 -g -Wall -Wextra -Wpedantic -Werror -I../src $< -o $@
 
 # Run serialized tests (single-threaded cache tests)
 test_serialized: $(TEST_SERIALIZED)
@@ -126,14 +131,23 @@ test_sprite_config: $(TEST_SPRITE_CONFIG)
 	@echo "==============================================="
 	cd .. && ./bin/test_sprite_config
 
+# Run renderer backend contract test
+test_renderer_backend_contract: $(TEST_RENDERER_BACKEND_CONTRACT)
+	@echo ""
+	@echo "==============================================="
+	@echo "Running renderer backend contract test..."
+	@echo "==============================================="
+	cd .. && ./bin/test_renderer_backend_contract
+
 # Run all tests in sequence
-run: test_serialized test_concurrent test_hash_diag test_render_prims test_sprite_config
+run: test_renderer_backend_contract test_serialized test_concurrent test_hash_diag test_render_prims test_sprite_config
 	@echo ""
 	@echo "==============================================="
 	@echo "All tests passed!"
 	@echo "==============================================="
 
 clean:
-	rm -f $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_CONFIG) *.o
+	rm -f $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_CONFIG) \
+		$(TEST_RENDERER_BACKEND_CONTRACT) *.o
 
-.PHONY: all clean run test_serialized test_concurrent test_render_prims test_sprite_config
+.PHONY: all clean run test_serialized test_concurrent test_render_prims test_sprite_config test_renderer_backend_contract

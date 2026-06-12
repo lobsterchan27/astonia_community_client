@@ -3,6 +3,10 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#include "dll.h"
 
 #define SDL_CUR_c_only    1
 #define SDL_CUR_c_take    2

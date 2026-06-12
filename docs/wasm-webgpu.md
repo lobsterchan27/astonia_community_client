@@ -70,6 +70,38 @@ Check whether this host can build the target:
 make wasm-check-env
 ```
 
+Build the current renderer slice:
+
+```bash
+make wasm
+```
+
+This compiles `browser/dist/astonia-client.js` from the WASM-only Sokol WebGPU
+backend and a minimal native harness. The harness enters through the existing
+`sdl_init`, `sdl_clear`, `sdl_render`, and `sdl_exit` lifecycle calls; the
+WASM-only bridge delegates those calls to Sokol WebGPU. It deliberately does
+not contain protocol replay, sprite rendering, network transport, asset
+packaging, or the browser frame-pump split owned by later slices.
+
+Run the dependency-light renderer API check:
+
+```bash
+make -f build/make/Makefile.wasm renderer-contract-check
+```
+
+## Sokol Dependency
+
+Sokol headers are vendored in `third_party/sokol` from upstream commit
+`ae0bc31daad8a60457cad4b5dae9223f237b2e34`. The included files are:
+
+- `sokol_app.h`
+- `sokol_gfx.h`
+- `sokol_glue.h`
+- `sokol_log.h`
+- `LICENSE`
+
+The refresh command is documented in `third_party/sokol/README.md`.
+
 Start the browser host:
 
 ```bash
