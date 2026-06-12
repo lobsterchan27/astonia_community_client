@@ -165,6 +165,7 @@ export class AstoniaProtocolStateReplay {
   #skippedCounts;
   #ticksReplayed;
   #serverVersion;
+  #areaRetargets;
 
   constructor(options = {}) {
     const replayOptions = options ?? {};
@@ -185,6 +186,7 @@ export class AstoniaProtocolStateReplay {
     this.#skippedCounts = new Map();
     this.#ticksReplayed = 0;
     this.#serverVersion = normalizeServerVersion(replayOptions.serverVersion);
+    this.#areaRetargets = [];
   }
 
   replayTick(tick, metadata = {}) {
@@ -203,6 +205,7 @@ export class AstoniaProtocolStateReplay {
     const bytes = toUint8Array(payload);
     let offset = 0;
     const mapCursor = { lastCellIndex: -1 };
+    const retargetStart = this.#areaRetargets.length;
     const result = {
       payloadLength: bytes.length,
       commandCount: 0,
@@ -221,6 +224,7 @@ export class AstoniaProtocolStateReplay {
     }
 
     this.#ticksReplayed += 1;
+    result.retargetEvents = this.#areaRetargets.slice(retargetStart).map(cloneAreaRetarget);
     return result;
   }
 
@@ -245,6 +249,11 @@ export class AstoniaProtocolStateReplay {
       playersById,
       carriedItem: this.#carriedItem ? { ...this.#carriedItem } : null,
       textMessages: this.#textMessages.map((message) => ({ ...message })),
+      areaRetargets: {
+        total: this.#areaRetargets.length,
+        latest: this.#areaRetargets.length > 0 ? cloneAreaRetarget(this.#areaRetargets.at(-1)) : null,
+        events: this.#areaRetargets.map(cloneAreaRetarget)
+      },
       visibleWorld,
       commands: {
         modeled: countSnapshot(this.#modeledCounts),
@@ -283,6 +292,8 @@ export class AstoniaProtocolStateReplay {
         return this.#processSetCarriedItem(bytes, offset);
       case SV_NAME:
         return this.#processName(bytes, offset);
+      case SV_SERVER:
+        return this.#processServerRetarget(bytes, offset, metadata);
       case SV_LOGINDONE:
         this.#countModeled(commandName(command));
         this.#loginDone = true;
@@ -356,6 +367,18 @@ export class AstoniaProtocolStateReplay {
     });
 
     return length + 13;
+  }
+
+  #processServerRetarget(bytes, offset, metadata) {
+    ensureAvailable(bytes, offset, 7);
+    this.#countModeled('SV_SERVER');
+    this.#areaRetargets.push({
+      type: 'SV_SERVER',
+      tickIndex: metadata.tickIndex ?? null,
+      serverId: readUInt32LE(bytes, offset + 1),
+      port: readUInt16LE(bytes, offset + 5)
+    });
+    return 7;
   }
 
   #processProtocol(bytes, offset) {
@@ -578,7 +601,6 @@ export class AstoniaProtocolStateReplay {
         length = ceffectCommandLength(bytes, offset);
         break;
       case SV_ACT:
-      case SV_SERVER:
       case SV_AREAINFO:
         length = 7;
         break;
@@ -840,6 +862,10 @@ function countSnapshot(counts) {
 
 function clonePoint(point) {
   return point ? { ...point } : null;
+}
+
+function cloneAreaRetarget(event) {
+  return { ...event };
 }
 
 function clonePlayer(player) {

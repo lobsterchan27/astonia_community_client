@@ -23,6 +23,9 @@ export class AstoniaLiveSession extends EventTarget {
   #socket;
   #messageQueue;
   #state;
+  #loginOptions;
+  #baseGatewayUrl;
+  #areaRetargetAttempt;
 
   constructor(options = {}) {
     super();
@@ -42,6 +45,9 @@ export class AstoniaLiveSession extends EventTarget {
     this.#socket = null;
     this.#messageQueue = Promise.resolve();
     this.#state = initialState();
+    this.#loginOptions = null;
+    this.#baseGatewayUrl = DEFAULT_GATEWAY_URL;
+    this.#areaRetargetAttempt = 0;
   }
 
   get state() {
@@ -54,6 +60,9 @@ export class AstoniaLiveSession extends EventTarget {
     }
 
     const gatewayUrl = options.gatewayUrl || DEFAULT_GATEWAY_URL;
+    this.#loginOptions = { ...options, gatewayUrl };
+    this.#baseGatewayUrl = gatewayUrl;
+    this.#areaRetargetAttempt = 0;
     this.#decoder = this.#decoderFactory();
     this.#replay = this.#replayFactory();
     this.#tickBuffer = this.#tickBufferFactory();
@@ -68,6 +77,10 @@ export class AstoniaLiveSession extends EventTarget {
     };
     this.#emitChange();
 
+    this.#openGatewaySocket(gatewayUrl);
+  }
+
+  #openGatewaySocket(gatewayUrl, retarget = null) {
     const socket = this.#webSocketFactory(gatewayUrl);
     this.#socket = socket;
     socket.binaryType = 'arraybuffer';
@@ -78,7 +91,7 @@ export class AstoniaLiveSession extends EventTarget {
       }
 
       try {
-        const frames = buildAstoniaLoginFrames(options);
+        const frames = buildAstoniaLoginFrames(this.#loginOptions ?? {});
         for (const frame of frames) {
           socket.send(frame);
           this.#state.outboundFrames += 1;
@@ -86,7 +99,16 @@ export class AstoniaLiveSession extends EventTarget {
         }
 
         this.#state.status = 'login-sent';
-        this.#state.statusDetail = 'Login bytes sent; waiting for server ticks.';
+        if (retarget) {
+          this.#state.areaRetarget = {
+            ...this.#state.areaRetarget,
+            status: 'connected',
+            result: 'Login bytes sent to retargeted gateway.'
+          };
+          this.#state.statusDetail = `Retargeted to area port ${retarget.port}; login bytes sent.`;
+        } else {
+          this.#state.statusDetail = 'Login bytes sent; waiting for server ticks.';
+        }
         this.#emitChange();
       } catch (error) {
         this.#fail(error, socket);
@@ -104,9 +126,7 @@ export class AstoniaLiveSession extends EventTarget {
         return;
       }
 
-      this.#state.status = 'error';
-      this.#state.statusDetail = 'Gateway WebSocket reported an error.';
-      this.#emitChange();
+      this.#fail(new Error('Gateway WebSocket reported an error.'), socket);
     });
 
     socket.addEventListener('close', () => {
@@ -118,6 +138,13 @@ export class AstoniaLiveSession extends EventTarget {
       if (this.#state.status !== 'error') {
         this.#state.status = this.#state.decodedTicks > 0 ? 'closed' : 'closed-before-ticks';
         this.#state.statusDetail = 'Gateway WebSocket closed.';
+        if (this.#state.areaRetarget?.status === 'connecting') {
+          this.#state.areaRetarget = {
+            ...this.#state.areaRetarget,
+            status: 'failed',
+            result: 'Gateway WebSocket closed before the retarget login completed.'
+          };
+        }
         this.#emitChange();
       }
     });
@@ -125,8 +152,9 @@ export class AstoniaLiveSession extends EventTarget {
 
   close() {
     this.#clearReplayTimer();
-    this.#socket?.close();
+    const socket = this.#socket;
     this.#socket = null;
+    socket?.close();
   }
 
   recordRenderTiming(durationMs) {
@@ -218,7 +246,8 @@ export class AstoniaLiveSession extends EventTarget {
 
     const replay = this.#replay;
     const tickBuffer = this.#tickBuffer;
-    if (!replay || !tickBuffer || !this.#socket || this.#socket.readyState !== 1) {
+    const socket = this.#socket;
+    if (!replay || !tickBuffer || !socket || socket.readyState !== 1) {
       return;
     }
 
@@ -234,13 +263,19 @@ export class AstoniaLiveSession extends EventTarget {
 
       const updateStartedAt = this.#now();
       const tickIndex = this.#state.decodedTicks;
-      replay.replayTick(tick, { tickIndex });
+      const replayResult = replay.replayTick(tick, { tickIndex });
       this.#state.decodedTicks += 1;
       this.#state.lastRawTickBytes = tick.rawLength ?? 0;
-      this.#state.snapshot = replay.snapshot();
-      this.#state.renderList = createAstoniaRenderList(this.#state.snapshot);
       tickBuffer.recordUpdateTiming(this.#now() - updateStartedAt);
       this.#state.latencyMetrics = tickBuffer.metrics();
+
+      if (replayResult?.retargetEvents?.length > 0) {
+        this.#retargetArea(replayResult.retargetEvents.at(-1), socket);
+        return;
+      }
+
+      this.#state.snapshot = replay.snapshot();
+      this.#state.renderList = createAstoniaRenderList(this.#state.snapshot);
       this.#state.lastReceivedTick = {
         decodedTicks: this.#state.decodedTicks,
         currentTick: this.#state.snapshot.currentTick ?? null,
@@ -261,6 +296,52 @@ export class AstoniaLiveSession extends EventTarget {
     } catch (error) {
       this.#fail(error, this.#socket);
     }
+  }
+
+  #retargetArea(event, socket) {
+    if (!this.#isCurrentSocket(socket)) {
+      return;
+    }
+
+    const requestedAfterDecodedTicks = this.#state.decodedTicks;
+    const targetGatewayUrl = buildRetargetGatewayUrl(this.#baseGatewayUrl, event.port);
+    const oldSocket = this.#socket;
+    const nextTickBuffer = this.#tickBufferFactory();
+    this.#clearReplayTimer();
+    this.#socket = null;
+    this.#decoder = this.#decoderFactory();
+    this.#replay = this.#replayFactory();
+    this.#tickBuffer = nextTickBuffer;
+    this.#messageQueue = Promise.resolve();
+    this.#areaRetargetAttempt += 1;
+    this.#state = {
+      ...this.#state,
+      status: 'retargeting',
+      statusDetail: `Server requested area ${event.serverId} on port ${event.port}; opening ${targetGatewayUrl}`,
+      gatewayUrl: targetGatewayUrl,
+      decodedTicks: 0,
+      lastRawTickBytes: 0,
+      snapshot: null,
+      renderList: null,
+      lastReceivedTick: null,
+      lastVisibleUpdate: null,
+      latencyMetrics: nextTickBuffer.metrics(),
+      areaRetarget: {
+        status: 'connecting',
+        attempt: this.#areaRetargetAttempt,
+        type: event.type,
+        tickIndex: event.tickIndex,
+        serverId: event.serverId,
+        port: event.port,
+        gatewayUrl: targetGatewayUrl,
+        baseGatewayUrl: this.#baseGatewayUrl,
+        requestedAfterDecodedTicks,
+        result: null
+      }
+    };
+    this.#emitChange();
+    oldSocket?.close();
+    this.#openGatewaySocket(targetGatewayUrl, this.#state.areaRetarget);
   }
 
   #scheduleBufferedReplay() {
@@ -303,6 +384,13 @@ export class AstoniaLiveSession extends EventTarget {
 
     this.#state.status = 'error';
     this.#state.statusDetail = error instanceof Error ? error.message : String(error);
+    if (this.#state.areaRetarget?.status === 'connecting') {
+      this.#state.areaRetarget = {
+        ...this.#state.areaRetarget,
+        status: 'failed',
+        result: this.#state.statusDetail
+      };
+    }
     this.#emitChange();
   }
 
@@ -336,7 +424,8 @@ function initialState() {
     lastMoveCommand: null,
     lastReceivedTick: null,
     lastVisibleUpdate: null,
-    latencyMetrics
+    latencyMetrics,
+    areaRetarget: null
   };
 }
 
@@ -348,7 +437,8 @@ function cloneState(state) {
     lastMoveCommand: state.lastMoveCommand ? cloneDebugObject(state.lastMoveCommand) : null,
     lastReceivedTick: state.lastReceivedTick ? cloneDebugObject(state.lastReceivedTick) : null,
     lastVisibleUpdate: state.lastVisibleUpdate ? cloneDebugObject(state.lastVisibleUpdate) : null,
-    latencyMetrics: state.latencyMetrics ? cloneDebugObject(state.latencyMetrics) : null
+    latencyMetrics: state.latencyMetrics ? cloneDebugObject(state.latencyMetrics) : null,
+    areaRetarget: state.areaRetarget ? cloneDebugObject(state.areaRetarget) : null
   };
 }
 
@@ -383,4 +473,12 @@ function copyBytes(bytes) {
   const copy = new Uint8Array(bytes.length);
   copy.set(bytes);
   return copy;
+}
+
+function buildRetargetGatewayUrl(gatewayUrl, port) {
+  const documentBase =
+    typeof window !== 'undefined' && window.location ? window.location.href : 'http://127.0.0.1/';
+  const url = new URL(gatewayUrl, documentBase);
+  url.searchParams.set('target-port', String(port));
+  return url.toString();
 }

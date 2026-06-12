@@ -985,3 +985,167 @@ test('live session ignores decoder failures that finish after the gateway closes
     decodedTicks: 0
   });
 });
+
+test('live session retargets through the gateway target port after buffered SV_SERVER replay', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const { AstoniaLiveSession } = await import('/src/live-session.js');
+    const sockets = [];
+    const decoders = [];
+
+    async function waitFor(predicate) {
+      const startedAt = Date.now();
+      while (!predicate()) {
+        if (Date.now() - startedAt > 1000) {
+          throw new Error('Timed out waiting for condition');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    class ManualWebSocket extends EventTarget {
+      static CLOSING = 2;
+
+      constructor(url) {
+        super();
+        this.url = url;
+        this.binaryType = '';
+        this.readyState = 0;
+        this.sent = [];
+      }
+
+      open() {
+        this.readyState = 1;
+        this.dispatchEvent(new Event('open'));
+      }
+
+      send(data) {
+        this.sent.push(Array.from(new Uint8Array(data)));
+      }
+
+      close() {
+        this.readyState = 3;
+        this.dispatchEvent(new CloseEvent('close', { code: 1000 }));
+      }
+
+      receive(bytes) {
+        this.dispatchEvent(new MessageEvent('message', { data: Uint8Array.from(bytes).buffer }));
+      }
+    }
+
+    const decoderTicks = [
+      [
+        {
+          payload: new Uint8Array([21, 0x02, 0, 0, 0, 0xd6, 0x15]),
+          rawLength: 7
+        }
+      ],
+      [
+        {
+          payload: new Uint8Array([43]),
+          rawLength: 1
+        }
+      ]
+    ];
+
+    const session = new AstoniaLiveSession({
+      decoderFactory: () => {
+        const index = decoders.length;
+        const decoder = {
+          calls: 0,
+          async pushChunk() {
+            this.calls += 1;
+            return decoderTicks[index] ?? [];
+          }
+        };
+        decoders.push(decoder);
+        return decoder;
+      },
+      webSocketFactory: (url) => {
+        const socket = new ManualWebSocket(url);
+        sockets.push(socket);
+        return socket;
+      },
+      tickBufferOptions: {
+        fallbackTickIntervalMs: 1,
+        maxInitialHoldMs: 1
+      }
+    });
+
+    session.connect({
+      gatewayUrl: 'wss://gateway.example.test/socket/path?foo=1&target-port=5556',
+      username: 'FixtureCapture',
+      password: 'fixturecapture',
+      protocolVersion: 3
+    });
+    sockets[0].open();
+    await waitFor(() => sockets[0].sent.length === 4);
+
+    sockets[0].receive([0x01]);
+    await waitFor(() => sockets.length === 2);
+
+    const stateAfterRetarget = session.state;
+    sockets[0].receive([0xff]);
+    sockets[0].dispatchEvent(new Event('error'));
+    sockets[0].close();
+
+    sockets[1].open();
+    await waitFor(() => sockets[1].sent.length === 4);
+    sockets[1].receive([0x02]);
+    await waitFor(() => session.state.status === 'live');
+
+    const finalState = session.state;
+
+    return {
+      socketUrls: sockets.map((socket) => socket.url),
+      oldSocketReadyState: sockets[0].readyState,
+      loginFramesResent: JSON.stringify(sockets[0].sent) === JSON.stringify(sockets[1].sent),
+      decoderCalls: decoders.map((decoder) => decoder.calls),
+      stateAfterRetarget: {
+        status: stateAfterRetarget.status,
+        decodedTicks: stateAfterRetarget.decodedTicks,
+        snapshot: stateAfterRetarget.snapshot,
+        renderList: stateAfterRetarget.renderList,
+        areaRetarget: stateAfterRetarget.areaRetarget
+      },
+      finalState: {
+        status: finalState.status,
+        decodedTicks: finalState.decodedTicks,
+        login: finalState.snapshot?.login,
+        areaRetarget: finalState.areaRetarget
+      }
+    };
+  });
+
+  expect(result.socketUrls).toEqual([
+    'wss://gateway.example.test/socket/path?foo=1&target-port=5556',
+    'wss://gateway.example.test/socket/path?foo=1&target-port=5590'
+  ]);
+  expect(result.oldSocketReadyState).toBe(3);
+  expect(result.loginFramesResent).toBe(true);
+  expect(result.decoderCalls).toEqual([1, 1]);
+  expect(result.stateAfterRetarget).toMatchObject({
+    status: 'retargeting',
+    decodedTicks: 0,
+    snapshot: null,
+    renderList: null,
+    areaRetarget: {
+      status: 'connecting',
+      serverId: 2,
+      port: 5590,
+      gatewayUrl: 'wss://gateway.example.test/socket/path?foo=1&target-port=5590'
+    }
+  });
+  expect(result.finalState).toMatchObject({
+    status: 'live',
+    decodedTicks: 1,
+    login: { done: true, doneCount: 1 },
+    areaRetarget: {
+      status: 'connected',
+      serverId: 2,
+      port: 5590,
+      gatewayUrl: 'wss://gateway.example.test/socket/path?foo=1&target-port=5590'
+    }
+  });
+});

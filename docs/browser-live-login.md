@@ -35,7 +35,8 @@ Start the WebSocket gateway from the client repository:
 cargo run --manifest-path gateway/Cargo.toml -- \
   --listen 127.0.0.1:8787 \
   --tcp-host 127.0.0.1 \
-  --tcp-port 5556
+  --tcp-port 5556 \
+  --target-port-range 5556-5590
 ```
 
 Start the browser dev server:
@@ -65,9 +66,10 @@ captures intentionally contain the outbound login byte stream.
 The live status should move through `Connecting`, `Login Sent`, and then
 `Live` after a successful login tick. The debug panel shows inbound/outbound
 frames and bytes, decoded tick count, current server tick, protocol version,
-player name and position, visible world counts, and modeled/skipped command
-counts. The canvas renders the visible world using decoded sprites where the
-loaded archives contain them and colored fallbacks otherwise.
+player name and position, visible world counts, modeled/skipped command counts,
+and the latest area retarget attempt/result. The canvas renders the visible
+world using decoded sprites where the loaded archives contain them and colored
+fallbacks otherwise.
 
 ## Automated Smoke
 
@@ -80,6 +82,12 @@ decode into eight live ticks, and that the canvas is nonblank:
 cd browser
 npm test -- tests/live-login.spec.mjs
 ```
+
+There is not yet a committed live fixture that causes the real server to emit
+`SV_SERVER`. The automated boundary for area transfer is currently the parser
+fixture test, a live-session fake-gateway reconnect test, and gateway TCP
+routing tests that prove allowed `target-port` requests reach the requested
+backend and disallowed ports are rejected.
 
 Run the complete browser suite with:
 

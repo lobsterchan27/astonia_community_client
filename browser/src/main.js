@@ -26,6 +26,7 @@ const latencyArrival = document.querySelector('[data-testid="live-latency-arriva
 const latencyTimings = document.querySelector('[data-testid="live-latency-timings"]');
 const bufferTargetChange = document.querySelector('[data-testid="live-buffer-target-change"]');
 const lastMoveCommand = document.querySelector('[data-testid="live-last-move-command"]');
+const areaRetarget = document.querySelector('[data-testid="live-area-retarget"]');
 const lastReceivedTick = document.querySelector('[data-testid="live-last-received-tick"]');
 const lastVisibleUpdate = document.querySelector('[data-testid="live-last-visible-update"]');
 const messageLog = document.querySelector('[data-testid="live-message-log"]');
@@ -133,6 +134,7 @@ async function updateLiveView(state) {
   worldSummary.textContent = `${snapshot?.visibleWorld?.nonEmptyCells ?? 0} cells / ${snapshot?.visibleWorld?.characters?.length ?? 0} characters`;
   commandCounts.textContent = `modeled ${snapshot?.commands?.modeled?.total ?? 0} / skipped ${snapshot?.commands?.skipped?.total ?? 0}`;
   lastMoveCommand.textContent = formatMoveCommand(state.lastMoveCommand);
+  areaRetarget.textContent = formatAreaRetarget(state.areaRetarget);
   lastReceivedTick.textContent = formatReceivedTick(state.lastReceivedTick);
   lastVisibleUpdate.textContent = formatVisibleUpdate(state.lastVisibleUpdate);
   messageLog.replaceChildren(
@@ -209,6 +211,15 @@ function formatMoveCommand(command) {
   const bytes = command.bytes.map((byte) => `0x${byte.toString(16).padStart(2, '0')}`).join(' ');
   const suffix = command.reason ? ` (${command.reason})` : '';
   return `${command.status} ${command.type} ${command.x},${command.y} [${bytes}] after ${command.sentAfterDecodedTicks} tick(s)${suffix}`;
+}
+
+function formatAreaRetarget(retarget) {
+  if (!retarget) {
+    return '-';
+  }
+
+  const result = retarget.result ? ` (${retarget.result})` : '';
+  return `${retarget.status} server ${retarget.serverId} port ${retarget.port} after ${retarget.requestedAfterDecodedTicks} tick(s)${result}`;
 }
 
 function formatReceivedTick(tick) {

@@ -195,6 +195,50 @@ test('accepts decoder-shaped tick objects and empty tick payloads', async ({ pag
   expect(snapshot.ticksReplayed).toBe(2);
 });
 
+test('models SV_SERVER as an area retarget event at the native command length', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const { AstoniaProtocolStateReplay } = await import('/src/protocol/state-replay.js');
+    const replay = new AstoniaProtocolStateReplay();
+
+    const replayResult = replay.replayTickPayload(
+      Uint8Array.from([
+        21,
+        0x78,
+        0x56,
+        0x34,
+        0x12,
+        0xd6,
+        0x15,
+        43
+      ]),
+      { tickIndex: 12 }
+    );
+
+    return {
+      replayResult,
+      snapshot: replay.snapshot()
+    };
+  });
+
+  expect(result.replayResult).toEqual({
+    payloadLength: 8,
+    commandCount: 2,
+    tickIndex: 12,
+    retargetEvents: [{ type: 'SV_SERVER', tickIndex: 12, serverId: 0x12345678, port: 5590 }]
+  });
+  expect(result.snapshot.areaRetargets).toEqual({
+    total: 1,
+    latest: { type: 'SV_SERVER', tickIndex: 12, serverId: 0x12345678, port: 5590 },
+    events: [{ type: 'SV_SERVER', tickIndex: 12, serverId: 0x12345678, port: 5590 }]
+  });
+  expect(result.snapshot.commands.modeled).toEqual({
+    total: 2,
+    byCommand: { SV_LOGINDONE: 1, SV_SERVER: 1 }
+  });
+});
+
 test('skips known CEFFECT messages and continues replaying following commands', async ({ page }) => {
   await page.goto('/');
 

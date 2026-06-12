@@ -8,16 +8,21 @@ use std::thread;
 use std::time::Duration;
 
 use tungstenite::error::Error as WebSocketError;
-use tungstenite::{Message, accept};
+use tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tungstenite::http::StatusCode;
+use tungstenite::{Message, accept_hdr};
 
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(2);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const BUFFER_SIZE: usize = 16 * 1024;
+const TARGET_PORT_QUERY_PARAM: &str = "target-port";
 
 #[derive(Clone, Debug)]
 pub struct GatewayConfig {
     pub tcp_host: String,
     pub tcp_port: u16,
+    pub target_port_allow_start: u16,
+    pub target_port_allow_end: u16,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -61,8 +66,14 @@ pub fn serve(listener: TcpListener, config: GatewayConfig, shutdown: Shutdown) -
 }
 
 fn handle_client(client: TcpStream, config: GatewayConfig) -> io::Result<()> {
-    let mut websocket = accept(client).map_err(|err| io::Error::other(err.to_string()))?;
-    let mut tcp = match TcpStream::connect((config.tcp_host.as_str(), config.tcp_port)) {
+    let mut selected_tcp_port = config.tcp_port;
+    let mut websocket = accept_hdr(client, |request: &Request, response: Response| {
+        selected_tcp_port =
+            select_target_port(request, &config).map_err(target_port_error_response)?;
+        Ok(response)
+    })
+    .map_err(|err| io::Error::other(err.to_string()))?;
+    let mut tcp = match TcpStream::connect((config.tcp_host.as_str(), selected_tcp_port)) {
         Ok(tcp) => tcp,
         Err(err) => {
             close_websocket(&mut websocket)?;
@@ -134,6 +145,39 @@ fn handle_client(client: TcpStream, config: GatewayConfig) -> io::Result<()> {
             thread::sleep(IO_POLL_INTERVAL);
         }
     }
+}
+
+fn select_target_port(request: &Request, config: &GatewayConfig) -> Result<u16, String> {
+    let Some(target_port) = target_port_query_value(request.uri().query()) else {
+        return Ok(config.tcp_port);
+    };
+
+    let port = target_port.parse::<u16>().map_err(|_| {
+        format!("{TARGET_PORT_QUERY_PARAM} must be a u16 port, got {target_port:?}")
+    })?;
+
+    if port >= config.target_port_allow_start && port <= config.target_port_allow_end {
+        Ok(port)
+    } else {
+        Err(format!(
+            "{TARGET_PORT_QUERY_PARAM} {port} is outside the allowed range {}-{}",
+            config.target_port_allow_start, config.target_port_allow_end
+        ))
+    }
+}
+
+fn target_port_query_value(query: Option<&str>) -> Option<&str> {
+    query?.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        (key == TARGET_PORT_QUERY_PARAM).then_some(value)
+    })
+}
+
+fn target_port_error_response(message: String) -> ErrorResponse {
+    tungstenite::http::Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .body(Some(message))
+        .expect("static target-port rejection response is valid")
 }
 
 fn close_websocket<S: Read + Write>(websocket: &mut tungstenite::WebSocket<S>) -> io::Result<()> {

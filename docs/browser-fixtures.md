@@ -15,11 +15,14 @@ Start the browser WebSocket gateway in another terminal:
 cargo run --manifest-path gateway/Cargo.toml -- \
   --listen 127.0.0.1:8787 \
   --tcp-host 127.0.0.1 \
-  --tcp-port 5556
+  --tcp-port 5556 \
+  --target-port-range 5556-5590
 ```
 
 For a different Docker host port, keep `--listen` as the browser-facing
 WebSocket address and pass the Docker mapping as `--tcp-host` and `--tcp-port`.
+If the fixture needs area retargets, set `--target-port-range` to the explicit
+safe range published by that local server.
 
 ## Dev Account
 
