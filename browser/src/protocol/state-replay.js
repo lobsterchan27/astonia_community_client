@@ -31,6 +31,7 @@ const SV_GOLD = 30;
 const SV_LOOKINV = 31;
 const SV_ITEMPRICE = 32;
 const SV_AREAINFO = 33;
+const SV_CEFFECT = 34;
 const SV_UEFFECT = 35;
 const SV_REALTIME = 36;
 const SV_SPEEDMODE = 37;
@@ -45,6 +46,7 @@ const SV_PROF = 48;
 const SV_PING = 49;
 const SV_UNIQUE = 50;
 const SV_MIL_EXP = 51;
+const SV_QUESTLOG = 52;
 const SV_PROTOCOL = 53;
 
 const SV_MAPTHIS = 0;
@@ -59,6 +61,11 @@ const SV_MAP11 = 192;
 const P3_MAX = 20;
 const P35_MAX = 10;
 const DEFAULT_DISTANCE = 25;
+const NATIVE_FIELD_SIZES = {
+  int: 4,
+  uint32_t: 4,
+  char_id_t: 2
+};
 
 const COMMAND_NAMES = new Map([
   [SV_SCROLL_UP, 'SV_SCROLL_UP'],
@@ -94,6 +101,7 @@ const COMMAND_NAMES = new Map([
   [SV_LOOKINV, 'SV_LOOKINV'],
   [SV_ITEMPRICE, 'SV_ITEMPRICE'],
   [SV_AREAINFO, 'SV_AREAINFO'],
+  [SV_CEFFECT, 'SV_CEFFECT'],
   [SV_UEFFECT, 'SV_UEFFECT'],
   [SV_REALTIME, 'SV_REALTIME'],
   [SV_SPEEDMODE, 'SV_SPEEDMODE'],
@@ -108,7 +116,34 @@ const COMMAND_NAMES = new Map([
   [SV_PING, 'SV_PING'],
   [SV_UNIQUE, 'SV_UNIQUE'],
   [SV_MIL_EXP, 'SV_MIL_EXP'],
+  [SV_QUESTLOG, 'SV_QUESTLOG'],
   [SV_PROTOCOL, 'SV_PROTOCOL']
+]);
+
+const CEFFECT_STRUCT_LENGTHS = new Map([
+  [1, nativeStructSize(['int', 'int', 'char_id_t', 'uint32_t'])],
+  [2, nativeStructSize(['int', 'int', 'uint32_t', 'int', 'int', 'int', 'int'])],
+  [3, nativeStructSize(['int', 'int', 'char_id_t', 'int', 'int'])],
+  [4, nativeStructSize(['int', 'int', 'uint32_t', 'int', 'int', 'int', 'int'])],
+  [5, nativeStructSize(['int', 'int', 'char_id_t'])],
+  [7, nativeStructSize(['int', 'int', 'uint32_t', 'int'])],
+  [8, nativeStructSize(['int', 'int', 'char_id_t', 'int'])],
+  [9, nativeStructSize(['int', 'int', 'char_id_t', 'uint32_t', 'uint32_t', 'int'])],
+  [10, nativeStructSize(['int', 'int', 'char_id_t', 'uint32_t'])],
+  [11, nativeStructSize(['int', 'int', 'char_id_t', 'uint32_t', 'uint32_t'])],
+  [12, nativeStructSize(['int', 'int', 'char_id_t', 'int'])],
+  [13, nativeStructSize(['int', 'int', 'uint32_t'])],
+  [14, nativeStructSize(['int', 'int', 'char_id_t', 'uint32_t', 'uint32_t', 'int'])],
+  [15, nativeStructSize(['int', 'int', 'int'])],
+  [16, nativeStructSize(['int', 'int'])],
+  [17, nativeStructSize(['int', 'int', 'uint32_t', 'int', 'int', 'int', 'int', 'int'])],
+  [18, nativeStructSize(['int', 'int', 'char_id_t', 'uint32_t', 'uint32_t', 'int'])],
+  [19, nativeStructSize(['int', 'int', 'char_id_t'])],
+  [20, nativeStructSize(['int', 'int', 'char_id_t'])],
+  [21, nativeStructSize(['int', 'int', 'uint32_t'])],
+  [22, nativeStructSize(['int', 'int', 'char_id_t', 'int', 'int'])],
+  [23, nativeStructSize(['int', 'int', 'char_id_t', 'uint32_t'])],
+  [24, nativeStructSize(['int', 'int', 'int'])]
 ]);
 
 const textDecoder = new TextDecoder('windows-1252');
@@ -129,8 +164,11 @@ export class AstoniaProtocolStateReplay {
   #modeledCounts;
   #skippedCounts;
   #ticksReplayed;
+  #serverVersion;
 
-  constructor() {
+  constructor(options = {}) {
+    const replayOptions = options ?? {};
+
     this.#protocolVersion = null;
     this.#distance = DEFAULT_DISTANCE;
     this.#width = DEFAULT_DISTANCE * 2 + 1;
@@ -146,6 +184,7 @@ export class AstoniaProtocolStateReplay {
     this.#modeledCounts = new Map();
     this.#skippedCounts = new Map();
     this.#ticksReplayed = 0;
+    this.#serverVersion = normalizeServerVersion(replayOptions.serverVersion);
   }
 
   replayTick(tick, metadata = {}) {
@@ -535,6 +574,9 @@ export class AstoniaProtocolStateReplay {
       case SV_SETITEM:
         length = 10;
         break;
+      case SV_CEFFECT:
+        length = ceffectCommandLength(bytes, offset);
+        break;
       case SV_ACT:
       case SV_SERVER:
       case SV_AREAINFO:
@@ -566,6 +608,9 @@ export class AstoniaProtocolStateReplay {
       case SV_MIL_EXP:
         length = 5;
         break;
+      case SV_QUESTLOG:
+        length = 137;
+        break;
       case SV_LOOKINV:
         length = 65;
         break;
@@ -576,10 +621,10 @@ export class AstoniaProtocolStateReplay {
         length = 13;
         break;
       case SV_TELEPORT:
-        length = this.#protocolVersion === 35 ? 9 : 13;
+        length = this.#serverVersion === 35 ? 9 : 13;
         break;
       case SV_PROF:
-        length = (this.#protocolVersion === 35 ? P35_MAX : P3_MAX) + 1;
+        length = (this.#serverVersion === 35 ? P35_MAX : P3_MAX) + 1;
         break;
       default:
         throw new Error(`Unsupported Astonia server command ${command} at payload offset ${offset}; cannot safely advance`);
@@ -715,6 +760,51 @@ function readUInt32LE(bytes, offset) {
       (bytes[offset + 3] << 24)) >>>
     0
   );
+}
+
+function readInt32LE(bytes, offset) {
+  const value = readUInt32LE(bytes, offset);
+  return value > 0x7fffffff ? value - 0x100000000 : value;
+}
+
+function ceffectCommandLength(bytes, offset) {
+  ensureAvailable(bytes, offset, 10);
+  const effectType = readInt32LE(bytes, offset + 6);
+  const structLength = CEFFECT_STRUCT_LENGTHS.get(effectType);
+  if (!structLength) {
+    throw new Error(`Unsupported SV_CEFFECT type ${effectType} at payload offset ${offset}; cannot safely advance`);
+  }
+  return structLength + 2;
+}
+
+function nativeStructSize(fields) {
+  let offset = 0;
+  let structAlignment = 1;
+
+  for (const field of fields) {
+    const size = NATIVE_FIELD_SIZES[field];
+    if (!size) {
+      throw new Error(`Unknown native field type ${field}`);
+    }
+    structAlignment = Math.max(structAlignment, size);
+    offset = alignTo(offset, size) + size;
+  }
+
+  return alignTo(offset, structAlignment);
+}
+
+function alignTo(value, alignment) {
+  return Math.ceil(value / alignment) * alignment;
+}
+
+function normalizeServerVersion(serverVersion) {
+  if (serverVersion === undefined) {
+    return 30;
+  }
+  if (serverVersion === 30 || serverVersion === 35) {
+    return serverVersion;
+  }
+  throw new RangeError('Astonia protocol replay serverVersion must be 30 or 35');
 }
 
 function incrementCount(counts, name) {

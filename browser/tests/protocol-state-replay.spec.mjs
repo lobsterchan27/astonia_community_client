@@ -31,6 +31,52 @@ async function replayDecodedTicksInBrowser(page, ticks) {
   }, ticks);
 }
 
+async function replayPayloadInBrowser(page, payload, options = {}) {
+  return page.evaluate(
+    async ({ serializedPayload, replayOptions }) => {
+      const { AstoniaProtocolStateReplay } = await import('/src/protocol/state-replay.js');
+      const replay = new AstoniaProtocolStateReplay(replayOptions);
+
+      replay.replayTickPayload(Uint8Array.from(serializedPayload));
+
+      return replay.snapshot();
+    },
+    { serializedPayload: payload, replayOptions: options }
+  );
+}
+
+async function replayPayloadErrorInBrowser(page, payload, options = {}) {
+  return page.evaluate(
+    async ({ serializedPayload, replayOptions }) => {
+      const { AstoniaProtocolStateReplay } = await import('/src/protocol/state-replay.js');
+      const replay = new AstoniaProtocolStateReplay(replayOptions);
+
+      try {
+        replay.replayTickPayload(Uint8Array.from(serializedPayload));
+      } catch (error) {
+        return { name: error.name, message: error.message };
+      }
+
+      return null;
+    },
+    { serializedPayload: payload, replayOptions: options }
+  );
+}
+
+function int32Bytes(value) {
+  return [value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, (value >> 24) & 0xff];
+}
+
+function ceffectPayload(effectType, structLength) {
+  const structBytes = [
+    ...int32Bytes(0),
+    ...int32Bytes(effectType),
+    ...Array(Math.max(0, structLength - 8)).fill(0)
+  ];
+
+  return [34, 0, ...structBytes];
+}
+
 test('replays docker login ticks into a minimal state snapshot', async ({ page }) => {
   await page.goto('/');
 
@@ -147,4 +193,72 @@ test('accepts decoder-shaped tick objects and empty tick payloads', async ({ pag
     byCommand: { SV_LOGINDONE: 1 }
   });
   expect(snapshot.ticksReplayed).toBe(2);
+});
+
+test('skips known CEFFECT messages and continues replaying following commands', async ({ page }) => {
+  await page.goto('/');
+
+  const cefFlashStructLength = 12;
+  const snapshot = await replayPayloadInBrowser(page, [...ceffectPayload(5, cefFlashStructLength), 43]);
+
+  expect(snapshot.login).toEqual({ done: true, doneCount: 1 });
+  expect(snapshot.commands.skipped).toEqual({
+    total: 1,
+    byCommand: { SV_CEFFECT: 1 }
+  });
+  expect(snapshot.commands.modeled).toEqual({
+    total: 1,
+    byCommand: { SV_LOGINDONE: 1 }
+  });
+});
+
+test('fails closed for unknown CEFFECT effect types', async ({ page }) => {
+  await page.goto('/');
+
+  const error = await replayPayloadErrorInBrowser(page, ceffectPayload(6, 8));
+
+  expect(error).toMatchObject({
+    name: 'Error',
+    message: 'Unsupported SV_CEFFECT type 6 at payload offset 0; cannot safely advance'
+  });
+});
+
+test('skips QUESTLOG messages at the native command length', async ({ page }) => {
+  await page.goto('/');
+
+  const questlogCommandLength = 137;
+  const snapshot = await replayPayloadInBrowser(page, [52, ...Array(questlogCommandLength - 1).fill(0), 43]);
+
+  expect(snapshot.login).toEqual({ done: true, doneCount: 1 });
+  expect(snapshot.commands.skipped).toEqual({
+    total: 1,
+    byCommand: { SV_QUESTLOG: 1 }
+  });
+  expect(snapshot.commands.modeled).toEqual({
+    total: 1,
+    byCommand: { SV_LOGINDONE: 1 }
+  });
+});
+
+test('uses serverVersion 35 for TELEPORT and PROF skip lengths', async ({ page }) => {
+  await page.goto('/');
+
+  const v35TeleportCommand = [45, ...Array(8).fill(0)];
+  const v35ProfCommand = [48, ...Array(10).fill(0)];
+  const snapshot = await replayPayloadInBrowser(page, [...v35TeleportCommand, ...v35ProfCommand, 43], {
+    serverVersion: 35
+  });
+
+  expect(snapshot.login).toEqual({ done: true, doneCount: 1 });
+  expect(snapshot.commands.skipped).toEqual({
+    total: 2,
+    byCommand: {
+      SV_PROF: 1,
+      SV_TELEPORT: 1
+    }
+  });
+  expect(snapshot.commands.modeled).toEqual({
+    total: 1,
+    byCommand: { SV_LOGINDONE: 1 }
+  });
 });
