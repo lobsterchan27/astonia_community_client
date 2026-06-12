@@ -21,6 +21,7 @@
 #include "sokol_log.h"
 
 #define ASTONIA_NATIVE_STARTUP_ADAPTER_EXPORT EMSCRIPTEN_KEEPALIVE
+#define ASTONIA_WASM_CONNECT_PACE_FRAMES      4
 
 extern int want_width;
 extern int want_height;
@@ -35,6 +36,7 @@ static int g_loop_init_result = ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED;
 static int g_frame_count;
 static int g_step_count;
 static int g_shutdown_count;
+static int g_connect_pace_frame;
 
 static void adapter_free_args(void)
 {
@@ -99,6 +101,7 @@ static void adapter_fail_startup(AstoniaNativeStartupAdapterStatus status)
 
 static void adapter_init(void)
 {
+	g_connect_pace_frame = 0;
 	g_status = ASTONIA_NATIVE_STARTUP_ADAPTER_STARTING;
 	if (g_argv_copy_failed) {
 		g_startup_result = ASTONIA_NATIVE_CLIENT_ARGS_FAILED;
@@ -122,6 +125,18 @@ static void adapter_init(void)
 	g_status = ASTONIA_NATIVE_STARTUP_ADAPTER_RUNNING;
 }
 
+static int adapter_should_pace_browser_connect(void)
+{
+	/* Let browser WebSocket open/read callbacks run while the native socket is still handshaking. */
+	if (sockstate != 1 && sockstate != 2) {
+		g_connect_pace_frame = 0;
+		return 0;
+	}
+
+	g_connect_pace_frame = (g_connect_pace_frame + 1) % ASTONIA_WASM_CONNECT_PACE_FRAMES;
+	return g_connect_pace_frame != 0;
+}
+
 static void adapter_frame(void)
 {
 	if (g_status != ASTONIA_NATIVE_STARTUP_ADAPTER_RUNNING) {
@@ -129,6 +144,10 @@ static void adapter_frame(void)
 	}
 
 	g_frame_count++;
+	if (adapter_should_pace_browser_connect()) {
+		return;
+	}
+
 	if (!main_loop_step()) {
 		g_status = ASTONIA_NATIVE_STARTUP_ADAPTER_STOPPED;
 		adapter_shutdown();

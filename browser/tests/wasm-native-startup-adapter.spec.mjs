@@ -61,7 +61,7 @@ function buildHarness(emcc) {
     '-sALLOW_MEMORY_GROWTH=1',
     '-sASSERTIONS=1',
     '-sNO_EXIT_RUNTIME=1',
-    "-sEXPORTED_FUNCTIONS=['_wasm_native_startup_adapter_harness_run','_wasm_native_startup_adapter_harness_phase']",
+    "-sEXPORTED_FUNCTIONS=['_wasm_native_startup_adapter_harness_run','_wasm_native_startup_adapter_harness_network_pacing','_wasm_native_startup_adapter_harness_phase']",
     '-o',
     harnessOutput
   ];
@@ -107,5 +107,29 @@ test.describe('WASM native startup adapter harness', () => {
     });
 
     expect(result).toEqual({ result: 0, phase: 6 });
+  });
+
+  test('paces pre-login WebSocket states without stopping native frames', async ({ page }) => {
+    await page.goto('/');
+    const result = await page.evaluate(async () => {
+      const imported = await import(`/dist/wasm-native-startup-adapter-harness.mjs?t=${Date.now()}`);
+      const createModule = imported.default ?? imported.createWasmNativeStartupAdapterHarness;
+      const module = await createModule({
+        locateFile(path) {
+          return `/dist/${path}`;
+        }
+      });
+
+      try {
+        return {
+          result: module._wasm_native_startup_adapter_harness_network_pacing(),
+          phase: module._wasm_native_startup_adapter_harness_phase()
+        };
+      } catch (error) {
+        return { error: String(error), phase: module._wasm_native_startup_adapter_harness_phase() };
+      }
+    });
+
+    expect(result).toEqual({ result: 0, phase: 41 });
   });
 });

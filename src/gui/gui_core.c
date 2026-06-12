@@ -423,6 +423,15 @@ static int main_loop_step_internal(int block_until_frame)
 
 	start = (long long)SDL_GetTicks();
 	poll_network();
+#if defined(__EMSCRIPTEN__)
+	/* Browser WebSocket callbacks run between JS tasks; keep pre-login frames network-first. */
+	if (sockstate == 1 || sockstate == 2) {
+		gui_time_network += (uint64_t)(SDL_GetTicks() - (Uint64)start);
+		sdl_loop();
+		schedule_next_tick();
+		return !quit;
+	}
+#endif
 
 	// synchronise frames and ticks if at the same speed
 	if (sockstate == 4 && MPF == MPT) {
@@ -479,7 +488,8 @@ static int main_loop_step_internal(int block_until_frame)
 		gui_frametime = SDL_GetTicks() - main_loop_state.gui_last_frame;
 		main_loop_state.gui_last_frame = SDL_GetTicks();
 
-		if (sdl_is_shown() && (!(tick & 3) || !game_slowdown || sockstate != 4)) {
+		int should_display = sdl_is_shown() && (!(tick & 3) || !game_slowdown || sockstate != 4);
+		if (should_display) {
 			sdl_clear();
 			display();
 			amod_frame();

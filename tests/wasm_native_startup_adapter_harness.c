@@ -21,6 +21,7 @@ char username[40];
 char password[16];
 char *target_server;
 uint16_t target_port = 5556;
+int sockstate;
 int frames_per_second = TICKS;
 int sdl_multi = 4;
 int namesize = 1;
@@ -254,6 +255,7 @@ EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_run(void)
 	memset(username, 0, sizeof(username));
 	memset(password, 0, sizeof(password));
 	server_url[0] = '\0';
+	sockstate = 0;
 	want_width = 0;
 	want_height = 0;
 	sdl_multi = 4;
@@ -323,6 +325,82 @@ EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_run(void)
 		return 12;
 	}
 
+	return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_network_pacing(void)
+{
+	char *argv[] = {
+		"moac",
+		"-u",
+		"BrowserUser",
+		"-p",
+		"BrowserPass",
+		"-d",
+		"ws://127.0.0.1:8787/gateway",
+		"-w",
+		"1024",
+		"-h",
+		"768",
+		"-m",
+		"0",
+	};
+	sapp_desc desc;
+
+	memset(username, 0, sizeof(username));
+	memset(password, 0, sizeof(password));
+	server_url[0] = '\0';
+	sockstate = 0;
+	want_width = 0;
+	want_height = 0;
+	sdl_multi = 4;
+
+	g_loop_init_count = 0;
+	g_loop_step_count = 0;
+	g_loop_shutdown_count = 0;
+	g_native_shutdown_count = 0;
+	g_sapp_request_quit_count = 0;
+	g_harness_phase = 40;
+
+	desc = astonia_native_startup_adapter_sokol_main((int)(sizeof(argv) / sizeof(argv[0])), argv);
+	if (!desc.init_cb || !desc.frame_cb || !desc.cleanup_cb) {
+		return 1;
+	}
+
+	desc.init_cb();
+	if (astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_RUNNING) {
+		return 2;
+	}
+
+	sockstate = 1;
+	desc.frame_cb();
+	desc.frame_cb();
+	desc.frame_cb();
+	if (g_loop_step_count != 0 || astonia_native_startup_adapter_frame_count() != 3 ||
+	    astonia_native_startup_adapter_step_count() != 0) {
+		return 3;
+	}
+
+	desc.frame_cb();
+	if (g_loop_step_count != 1 || astonia_native_startup_adapter_frame_count() != 4 ||
+	    astonia_native_startup_adapter_step_count() != 1) {
+		return 4;
+	}
+
+	sockstate = 3;
+	desc.frame_cb();
+	desc.frame_cb();
+	if (g_loop_step_count != 3 || astonia_native_startup_adapter_frame_count() != 6 ||
+	    astonia_native_startup_adapter_step_count() != 3) {
+		return 5;
+	}
+
+	desc.cleanup_cb();
+	if (g_loop_shutdown_count != 1 || astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_CLEANED_UP) {
+		return 6;
+	}
+
+	g_harness_phase = 41;
 	return 0;
 }
 
