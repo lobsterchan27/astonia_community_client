@@ -378,6 +378,32 @@ static int test_texture_lifecycle(void)
 	return 0;
 }
 
+static int test_argb_to_rgba_conversion(void)
+{
+	const uint32_t src[3] = {
+		0x11223344u,
+		0x80abcdefu,
+		0xff010203u,
+	};
+	uint8_t dst[12];
+
+	astonia_renderer_argb8888_to_rgba8888(dst, src, 3u);
+	CHECK(dst[0] == 0x22u);
+	CHECK(dst[1] == 0x33u);
+	CHECK(dst[2] == 0x44u);
+	CHECK(dst[3] == 0x11u);
+	CHECK(dst[4] == 0xabu);
+	CHECK(dst[5] == 0xcdu);
+	CHECK(dst[6] == 0xefu);
+	CHECK(dst[7] == 0x80u);
+	CHECK(dst[8] == 0x01u);
+	CHECK(dst[9] == 0x02u);
+	CHECK(dst[10] == 0x03u);
+	CHECK(dst[11] == 0xffu);
+
+	return 0;
+}
+
 static int test_textured_quad_blit_shape(void)
 {
 	const AstoniaRendererBackend *backend = &g_fake_backend;
@@ -520,6 +546,9 @@ int main(void)
 		return 1;
 	}
 	if (run_test("texture lifecycle", test_texture_lifecycle) != 0) {
+		return 1;
+	}
+	if (run_test("argb to rgba conversion", test_argb_to_rgba_conversion) != 0) {
 		return 1;
 	}
 	if (run_test("textured quad blit shape", test_textured_quad_blit_shape) != 0) {

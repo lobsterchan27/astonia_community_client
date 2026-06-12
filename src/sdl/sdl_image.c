@@ -775,7 +775,7 @@ retry:
 
 void sdl_make(struct sdl_texture *st, struct sdl_image *si, int preload)
 {
-	SDL_Texture *texture;
+	SDL_Texture *texture = NULL;
 	int x, y, scale, sink, dropalpha;
 	double ix, iy, low_x, low_y, high_x, high_y, dbr, dbg, dbb, dba;
 	uint32_t irgb;
@@ -1097,6 +1097,16 @@ void sdl_make(struct sdl_texture *st, struct sdl_image *si, int preload)
 #endif
 
 		if (st->xres > 0 && st->yres > 0) {
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+			texture = sdl_backend_create_texture_from_argb8888(
+			    st->xres * sdl_scale, st->yres * sdl_scale, st->pixel,
+			    (size_t)st->xres * sizeof(uint32_t) * (size_t)sdl_scale);
+			if (!texture) {
+				warn("Renderer texture upload failed in sprite %d (%s, %d,%d) preload=%d", st->sprite, st->text,
+				    st->xres, st->yres, preload);
+				return;
+			}
+#else
 			texture = SDL_CreateTexture(
 			    sdlren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, st->xres * sdl_scale, st->yres * sdl_scale);
 			if (!texture) {
@@ -1106,6 +1116,7 @@ void sdl_make(struct sdl_texture *st, struct sdl_image *si, int preload)
 			}
 			SDL_UpdateTexture(texture, NULL, st->pixel, (int)(st->xres * sizeof(uint32_t) * (size_t)sdl_scale));
 			SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+#endif
 			// Update memory accounting when texture is actually created
 			extern long long mem_tex;
 			__atomic_add_fetch(&mem_tex, st->xres * st->yres * sizeof(uint32_t), __ATOMIC_RELAXED);

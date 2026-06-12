@@ -5,6 +5,7 @@
 #ifndef SDL_PRIVATE_H
 #define SDL_PRIVATE_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <zip.h>
 #include <png.h>
@@ -12,6 +13,10 @@
 #include <SDL3_mixer/SDL_mixer.h>
 
 #include "sdl/sdl_state.h"
+
+#if defined(__EMSCRIPTEN__) || defined(SDL_RENDER_BACKEND_TEXTURES_FOR_TEST)
+#define SDL_USE_RENDER_BACKEND_TEXTURES 1
+#endif
 
 #ifndef ASTONIA_RENDERFONT_STRUCT_DEFINED
 #define ASTONIA_RENDERFONT_STRUCT_DEFINED
@@ -142,6 +147,27 @@ uint32_t sdl_colorbalance(uint32_t irgb, char cr, char cg, char cb, char light, 
 // Internal functions from sdl_draw.c
 // ============================================================================
 SDL_Texture *sdl_maketext(const char *text, struct renderfont *font, uint32_t color, int flags);
+
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+typedef struct sdl_backend_rect {
+	float x;
+	float y;
+	float w;
+	float h;
+} SdlBackendRect;
+
+static inline int sdl_backend_argb8888_pitch_is_valid(int width, size_t pitch_bytes)
+{
+	return width > 0 && pitch_bytes >= (size_t)width * sizeof(uint32_t);
+}
+
+SDL_Texture *sdl_backend_create_texture_from_argb8888(
+    int width, int height, const uint32_t *pixels, size_t pitch_bytes);
+void sdl_backend_destroy_texture(SDL_Texture *texture);
+int sdl_backend_get_texture_size(SDL_Texture *texture, float *width, float *height);
+int sdl_backend_set_texture_alpha(SDL_Texture *texture, uint8_t alpha);
+int sdl_backend_blit_texture(SDL_Texture *texture, const SdlBackendRect *src, const SdlBackendRect *dst);
+#endif
 
 // ============================================================================
 // Internal functions from sdl_core.c

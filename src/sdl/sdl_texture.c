@@ -180,6 +180,44 @@ SDL_Texture *sdl_maketext(const char *text, struct renderfont *font, uint32_t co
 extern SDL_Mutex *premutex;
 extern int if_single_thread_process_one_job(void); // in sdl_core.c
 
+void sdl_native_state_destroy_cache_resources(void)
+{
+	for (int cache_index = 0; cache_index < MAX_TEXCACHE; cache_index++) {
+		uint16_t flags = flags_load(&sdlt[cache_index]);
+
+		if (!flags) {
+			continue;
+		}
+
+		if ((flags & SF_DIDTEX) && sdlt[cache_index].tex) {
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+			sdl_backend_destroy_texture(sdlt[cache_index].tex);
+#else
+			SDL_DestroyTexture(sdlt[cache_index].tex);
+#endif
+			sdlt[cache_index].tex = NULL;
+		}
+
+		if ((flags & SF_DIDALLOC) && sdlt[cache_index].pixel) {
+#ifdef SDL_FAST_MALLOC
+			FREE(sdlt[cache_index].pixel);
+#else
+			xfree(sdlt[cache_index].pixel);
+#endif
+			sdlt[cache_index].pixel = NULL;
+		}
+
+		if ((flags & SF_TEXT) && sdlt[cache_index].text) {
+#ifdef SDL_FAST_MALLOC
+			FREE(sdlt[cache_index].text);
+#else
+			xfree(sdlt[cache_index].text);
+#endif
+			sdlt[cache_index].text = NULL;
+		}
+	}
+}
+
 // ============================================================================
 // Texture Cache Concurrency Invariants
 // ============================================================================
@@ -450,12 +488,22 @@ static int tex_entry_build_text(int cache_index, const struct tex_request *r, in
 	sdlt[cache_index].text_flags = (uint16_t)r->text_flags;
 	sdlt[cache_index].text_font = r->text_font;
 #ifdef SDL_FAST_MALLOC
-	sdlt[cache_index].text = STRDUP(r->text);
+	{
+		size_t text_len = strlen(r->text) + 1u;
+		sdlt[cache_index].text = MALLOC(text_len);
+		if (sdlt[cache_index].text) {
+			memcpy(sdlt[cache_index].text, r->text, text_len);
+		}
+	}
 #else
 	sdlt[cache_index].text = xstrdup(r->text, MEM_TEMP7);
 #endif
 	if (sdlt[cache_index].tex) {
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+		sdl_backend_get_texture_size(sdlt[cache_index].tex, &w, &h);
+#else
 		SDL_GetTextureSize(sdlt[cache_index].tex, &w, &h);
+#endif
 		sdlt[cache_index].xres = (uint16_t)w;
 		sdlt[cache_index].yres = (uint16_t)h;
 		// Set flags ONLY if tex creation succeeded
@@ -623,7 +671,11 @@ static int texcache_acquire_slot(void)
 			__atomic_sub_fetch(
 			    &mem_tex, sdlt[cache_index].xres * sdlt[cache_index].yres * sizeof(uint32_t), __ATOMIC_RELAXED);
 			if (sdlt[cache_index].tex) {
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+				sdl_backend_destroy_texture(sdlt[cache_index].tex);
+#else
 				SDL_DestroyTexture(sdlt[cache_index].tex);
+#endif
 				sdlt[cache_index].tex = NULL; // Clear pointer after destroying
 			}
 		} else if (flags & SF_DIDALLOC) {
@@ -1008,7 +1060,11 @@ int sdl_tex_yres(int cache_index)
 void sdl_tex_alpha(int cache_index, int alpha)
 {
 	if (sdlt[cache_index].tex) {
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+		sdl_backend_set_texture_alpha(sdlt[cache_index].tex, (uint8_t)alpha);
+#else
 		SDL_SetTextureAlphaMod(sdlt[cache_index].tex, (Uint8)alpha);
+#endif
 	}
 }
 

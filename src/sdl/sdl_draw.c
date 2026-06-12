@@ -35,6 +35,10 @@
 #define G16TO32(color) (int)(((((color) >> 5) & 31) / 31.0f) * 255.0f)
 #define B16TO32(color) (int)((((color) & 31) / 31.0f) * 255.0f)
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #define MAXFONTHEIGHT 64
 
 // Current blend mode for rendering operations (used by all drawing functions)
@@ -45,10 +49,20 @@ static void sdl_blit_tex(
 {
 	int addx = 0, addy = 0;
 	float f_dx, f_dy;
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	SdlBackendRect dr, sr;
+#else
 	SDL_FRect dr, sr;
+#endif
 	Uint64 start = SDL_GetTicks();
 
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	if (!sdl_backend_get_texture_size(tex, &f_dx, &f_dy)) {
+		return;
+	}
+#else
 	SDL_GetTextureSize(tex, &f_dx, &f_dy);
+#endif
 	int dx = (int)f_dx;
 	int dy = (int)f_dy;
 
@@ -70,6 +84,9 @@ static void sdl_blit_tex(
 	if (sy + dy >= clipey) {
 		dy = clipey - sy;
 	}
+	if (dx <= 0 || dy <= 0) {
+		return;
+	}
 	dx *= sdl_scale;
 	dy *= sdl_scale;
 
@@ -83,7 +100,11 @@ static void sdl_blit_tex(
 	sr.y = (float)(addy * sdl_scale);
 	sr.h = (float)dy;
 
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_backend_blit_texture(tex, &sr, &dr);
+#else
 	SDL_RenderTexture(sdlren, tex, &sr, &dr);
+#endif
 
 	sdl_time_blit += (long long)(SDL_GetTicks() - start);
 }
@@ -167,6 +188,10 @@ SDL_Texture *sdl_maketext(const char *text, struct renderfont *font, uint32_t co
 	sdl_time_text += (long long)(SDL_GetTicks() - start);
 
 	start = SDL_GetTicks();
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)otext;
+	SDL_Texture *texture = NULL;
+#else
 	SDL_Texture *texture = SDL_CreateTexture(sdlren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, sizex, sizey);
 	if (texture) {
 		SDL_UpdateTexture(texture, NULL, pixel, (int)((size_t)sizex * sizeof(uint32_t)));
@@ -174,6 +199,7 @@ SDL_Texture *sdl_maketext(const char *text, struct renderfont *font, uint32_t co
 	} else {
 		warn("SDL_texture Error: %s maketext (%s)", SDL_GetError(), otext);
 	}
+#endif
 #ifdef SDL_FAST_MALLOC
 	FREE(pixel);
 #else

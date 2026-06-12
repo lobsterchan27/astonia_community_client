@@ -9,6 +9,9 @@
 #include "render_backend/sokol_webgpu_backend.h"
 
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "sokol_app.h"
 #include "sokol_gfx.h"
@@ -18,21 +21,268 @@
 typedef struct sokol_webgpu_state {
 	bool initialized;
 	int frames;
+	int width;
+	int height;
 	AstoniaRendererBlendMode blend_mode;
+	sg_environment environment;
+	sg_shader sprite_shader;
+	sg_pipeline sprite_pipeline;
+	sg_sampler sprite_sampler;
+	sg_buffer sprite_vertex_buffer;
 } SokolWebgpuState;
 
+typedef struct sokol_texture_slot {
+	uint32_t id;
+	sg_image image;
+	sg_view view;
+	int width;
+	int height;
+	AstoniaRendererTextureFormat source_format;
+} SokolTextureSlot;
+
+typedef struct sprite_vertex {
+	float x;
+	float y;
+	float u;
+	float v;
+	uint8_t r;
+	uint8_t g;
+	uint8_t b;
+	uint8_t a;
+} SpriteVertex;
+
+typedef struct sprite_vs_params {
+	float screen_size[2];
+	float pad[2];
+} SpriteVsParams;
+
 static SokolWebgpuState g_sokol_webgpu;
+
+#define SOKOL_MAX_TEXTURES          16384
+#define SOKOL_SPRITE_VERTEX_BYTES   (4 * 1024 * 1024)
+#define SOKOL_SPRITE_VERTEX_COUNT   6
+#define SOKOL_SPRITE_TRIANGLE_COUNT 6
+
+static SokolTextureSlot g_texture_slots[SOKOL_MAX_TEXTURES];
+static uint32_t g_next_texture_id = 1u;
+
+static const char g_sprite_shader_wgsl[] =
+    "struct VsParams {\n"
+    "  screen_size: vec2<f32>,\n"
+    "  pad: vec2<f32>,\n"
+    "};\n"
+    "@group(0) @binding(0) var<uniform> vs_params: VsParams;\n"
+    "struct VertexInput {\n"
+    "  @location(0) pos: vec2<f32>,\n"
+    "  @location(1) uv: vec2<f32>,\n"
+    "  @location(2) color: vec4<f32>,\n"
+    "};\n"
+    "struct VertexOutput {\n"
+    "  @builtin(position) position: vec4<f32>,\n"
+    "  @location(0) uv: vec2<f32>,\n"
+    "  @location(1) color: vec4<f32>,\n"
+    "};\n"
+    "@vertex fn vs_main(in: VertexInput) -> VertexOutput {\n"
+    "  var out: VertexOutput;\n"
+    "  let clip_x = (in.pos.x / vs_params.screen_size.x) * 2.0 - 1.0;\n"
+    "  let clip_y = 1.0 - (in.pos.y / vs_params.screen_size.y) * 2.0;\n"
+    "  out.position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);\n"
+    "  out.uv = in.uv;\n"
+    "  out.color = in.color;\n"
+    "  return out;\n"
+    "}\n"
+    "@group(1) @binding(0) var sprite_tex: texture_2d<f32>;\n"
+    "@group(1) @binding(1) var sprite_smp: sampler;\n"
+    "@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {\n"
+    "  return textureSample(sprite_tex, sprite_smp, in.uv) * in.color;\n"
+    "}\n";
+
+static SokolTextureSlot *find_texture_slot(AstoniaRendererTexture texture)
+{
+	if (texture.id == ASTONIA_RENDERER_TEXTURE_INVALID.id) {
+		return NULL;
+	}
+
+	for (size_t i = 0; i < SOKOL_MAX_TEXTURES; i++) {
+		if (g_texture_slots[i].id == texture.id) {
+			return &g_texture_slots[i];
+		}
+	}
+
+	return NULL;
+}
+
+static SokolTextureSlot *find_free_texture_slot(void)
+{
+	for (size_t i = 0; i < SOKOL_MAX_TEXTURES; i++) {
+		if (g_texture_slots[i].id == ASTONIA_RENDERER_TEXTURE_INVALID.id) {
+			return &g_texture_slots[i];
+		}
+	}
+
+	return NULL;
+}
+
+static uint32_t next_texture_id(void)
+{
+	uint32_t id = g_next_texture_id++;
+
+	if (g_next_texture_id == ASTONIA_RENDERER_TEXTURE_INVALID.id) {
+		g_next_texture_id = 1u;
+	}
+	return id ? id : g_next_texture_id++;
+}
+
+static int prepare_rgba_pixels(const AstoniaRendererTextureDesc *desc, const void *pixels, size_t pitch_bytes,
+    uint8_t **out_allocated, const void **out_pixels, size_t *out_pitch)
+{
+	const size_t row_bytes = (size_t)desc->width * 4u;
+
+	*out_allocated = NULL;
+	*out_pixels = NULL;
+	*out_pitch = row_bytes;
+
+	if (!pixels || pitch_bytes < row_bytes || desc->width <= 0 || desc->height <= 0) {
+		return 0;
+	}
+
+	if (desc->format == ASTONIA_RENDERER_TEXTURE_FORMAT_RGBA8888 && pitch_bytes == row_bytes) {
+		*out_pixels = pixels;
+		return 1;
+	}
+
+	*out_allocated = malloc(row_bytes * (size_t)desc->height);
+	if (!*out_allocated) {
+		return 0;
+	}
+
+	for (int y = 0; y < desc->height; y++) {
+		const uint8_t *src_row = (const uint8_t *)pixels + (size_t)y * pitch_bytes;
+		uint8_t *dst_row = *out_allocated + (size_t)y * row_bytes;
+
+		if (desc->format == ASTONIA_RENDERER_TEXTURE_FORMAT_ARGB8888) {
+			astonia_renderer_argb8888_to_rgba8888(dst_row, (const uint32_t *)src_row, (size_t)desc->width);
+		} else if (desc->format == ASTONIA_RENDERER_TEXTURE_FORMAT_RGBA8888) {
+			memcpy(dst_row, src_row, row_bytes);
+		} else {
+			free(*out_allocated);
+			*out_allocated = NULL;
+			return 0;
+		}
+	}
+
+	*out_pixels = *out_allocated;
+	return 1;
+}
+
+static int update_texture_full(
+    SokolTextureSlot *slot, const AstoniaRendererTextureDesc *desc, const void *pixels, size_t pitch_bytes)
+{
+	uint8_t *allocated = NULL;
+	const void *upload_pixels = NULL;
+	size_t upload_pitch = 0u;
+	sg_image_data data = {0};
+
+	if (!prepare_rgba_pixels(desc, pixels, pitch_bytes, &allocated, &upload_pixels, &upload_pitch)) {
+		return 0;
+	}
+
+	(void)upload_pitch;
+	data.mip_levels[0].ptr = upload_pixels;
+	data.mip_levels[0].size = (size_t)desc->width * (size_t)desc->height * 4u;
+	sg_update_image(slot->image, &data);
+	free(allocated);
+	return 1;
+}
+
+static int create_sprite_pipeline(void)
+{
+	sg_shader_desc shader_desc = {0};
+	sg_pipeline_desc pipeline_desc = {0};
+	sg_buffer_desc buffer_desc = {0};
+	sg_sampler_desc sampler_desc = {0};
+
+	shader_desc.vertex_func.source = g_sprite_shader_wgsl;
+	shader_desc.vertex_func.entry = "vs_main";
+	shader_desc.fragment_func.source = g_sprite_shader_wgsl;
+	shader_desc.fragment_func.entry = "fs_main";
+	shader_desc.attrs[0].base_type = SG_SHADERATTRBASETYPE_FLOAT;
+	shader_desc.attrs[1].base_type = SG_SHADERATTRBASETYPE_FLOAT;
+	shader_desc.attrs[2].base_type = SG_SHADERATTRBASETYPE_FLOAT;
+	shader_desc.uniform_blocks[0].stage = SG_SHADERSTAGE_VERTEX;
+	shader_desc.uniform_blocks[0].size = sizeof(SpriteVsParams);
+	shader_desc.uniform_blocks[0].wgsl_group0_binding_n = 0u;
+	shader_desc.views[0].texture.stage = SG_SHADERSTAGE_FRAGMENT;
+	shader_desc.views[0].texture.image_type = SG_IMAGETYPE_2D;
+	shader_desc.views[0].texture.sample_type = SG_IMAGESAMPLETYPE_FLOAT;
+	shader_desc.views[0].texture.wgsl_group1_binding_n = 0u;
+	shader_desc.samplers[0].stage = SG_SHADERSTAGE_FRAGMENT;
+	shader_desc.samplers[0].sampler_type = SG_SAMPLERTYPE_FILTERING;
+	shader_desc.samplers[0].wgsl_group1_binding_n = 1u;
+	shader_desc.texture_sampler_pairs[0].stage = SG_SHADERSTAGE_FRAGMENT;
+	shader_desc.texture_sampler_pairs[0].view_slot = 0u;
+	shader_desc.texture_sampler_pairs[0].sampler_slot = 0u;
+	shader_desc.label = "astonia-sprite-shader";
+
+	g_sokol_webgpu.sprite_shader = sg_make_shader(&shader_desc);
+	if (sg_query_shader_state(g_sokol_webgpu.sprite_shader) != SG_RESOURCESTATE_VALID) {
+		return 0;
+	}
+
+	pipeline_desc.shader = g_sokol_webgpu.sprite_shader;
+	pipeline_desc.layout.buffers[0].stride = sizeof(SpriteVertex);
+	pipeline_desc.layout.attrs[0].format = SG_VERTEXFORMAT_FLOAT2;
+	pipeline_desc.layout.attrs[0].offset = offsetof(SpriteVertex, x);
+	pipeline_desc.layout.attrs[1].format = SG_VERTEXFORMAT_FLOAT2;
+	pipeline_desc.layout.attrs[1].offset = offsetof(SpriteVertex, u);
+	pipeline_desc.layout.attrs[2].format = SG_VERTEXFORMAT_UBYTE4N;
+	pipeline_desc.layout.attrs[2].offset = offsetof(SpriteVertex, r);
+	pipeline_desc.colors[0].pixel_format = g_sokol_webgpu.environment.defaults.color_format;
+	pipeline_desc.colors[0].blend.enabled = true;
+	pipeline_desc.colors[0].blend.src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA;
+	pipeline_desc.colors[0].blend.dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+	pipeline_desc.colors[0].blend.src_factor_alpha = SG_BLENDFACTOR_ONE;
+	pipeline_desc.colors[0].blend.dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+	pipeline_desc.sample_count = g_sokol_webgpu.environment.defaults.sample_count;
+	pipeline_desc.label = "astonia-sprite-pipeline";
+
+	g_sokol_webgpu.sprite_pipeline = sg_make_pipeline(&pipeline_desc);
+	if (sg_query_pipeline_state(g_sokol_webgpu.sprite_pipeline) != SG_RESOURCESTATE_VALID) {
+		return 0;
+	}
+
+	buffer_desc.size = SOKOL_SPRITE_VERTEX_BYTES;
+	buffer_desc.usage.vertex_buffer = true;
+	buffer_desc.usage.stream_update = true;
+	buffer_desc.label = "astonia-sprite-vertex-stream";
+	g_sokol_webgpu.sprite_vertex_buffer = sg_make_buffer(&buffer_desc);
+	if (sg_query_buffer_state(g_sokol_webgpu.sprite_vertex_buffer) != SG_RESOURCESTATE_VALID) {
+		return 0;
+	}
+
+	sampler_desc.min_filter = SG_FILTER_NEAREST;
+	sampler_desc.mag_filter = SG_FILTER_NEAREST;
+	sampler_desc.mipmap_filter = SG_FILTER_NEAREST;
+	sampler_desc.wrap_u = SG_WRAP_CLAMP_TO_EDGE;
+	sampler_desc.wrap_v = SG_WRAP_CLAMP_TO_EDGE;
+	sampler_desc.label = "astonia-sprite-sampler";
+	g_sokol_webgpu.sprite_sampler = sg_make_sampler(&sampler_desc);
+	if (sg_query_sampler_state(g_sokol_webgpu.sprite_sampler) != SG_RESOURCESTATE_VALID) {
+		return 0;
+	}
+
+	return 1;
+}
 
 static int sokol_webgpu_init(int width, int height, const char *title, int monitor)
 {
 	sg_desc desc = {0};
 
-	(void)width;
-	(void)height;
 	(void)title;
 	(void)monitor;
 
-	desc.environment = sglue_environment();
+	g_sokol_webgpu.environment = sglue_environment();
+	desc.environment = g_sokol_webgpu.environment;
 	desc.logger.func = slog_func;
 	sg_setup(&desc);
 
@@ -43,18 +293,45 @@ static int sokol_webgpu_init(int width, int height, const char *title, int monit
 
 	g_sokol_webgpu.initialized = true;
 	g_sokol_webgpu.frames = 0;
+	g_sokol_webgpu.width = width;
+	g_sokol_webgpu.height = height;
 	g_sokol_webgpu.blend_mode = ASTONIA_RENDERER_BLEND_NORMAL;
+	memset(g_texture_slots, 0, sizeof(g_texture_slots));
+	g_next_texture_id = 1u;
+	if (!create_sprite_pipeline()) {
+		sg_shutdown();
+		memset(&g_sokol_webgpu, 0, sizeof(g_sokol_webgpu));
+		return 0;
+	}
 	return 1;
 }
 
 static void sokol_webgpu_shutdown(void)
 {
 	if (g_sokol_webgpu.initialized) {
+		for (size_t i = 0; i < SOKOL_MAX_TEXTURES; i++) {
+			if (g_texture_slots[i].id != ASTONIA_RENDERER_TEXTURE_INVALID.id) {
+				sg_destroy_view(g_texture_slots[i].view);
+				sg_destroy_image(g_texture_slots[i].image);
+			}
+		}
+		if (g_sokol_webgpu.sprite_sampler.id) {
+			sg_destroy_sampler(g_sokol_webgpu.sprite_sampler);
+		}
+		if (g_sokol_webgpu.sprite_vertex_buffer.id) {
+			sg_destroy_buffer(g_sokol_webgpu.sprite_vertex_buffer);
+		}
+		if (g_sokol_webgpu.sprite_pipeline.id) {
+			sg_destroy_pipeline(g_sokol_webgpu.sprite_pipeline);
+		}
+		if (g_sokol_webgpu.sprite_shader.id) {
+			sg_destroy_shader(g_sokol_webgpu.sprite_shader);
+		}
 		sg_shutdown();
 	}
-	g_sokol_webgpu.initialized = false;
-	g_sokol_webgpu.frames = 0;
-	g_sokol_webgpu.blend_mode = ASTONIA_RENDERER_BLEND_NORMAL;
+	memset(&g_sokol_webgpu, 0, sizeof(g_sokol_webgpu));
+	memset(g_texture_slots, 0, sizeof(g_texture_slots));
+	g_next_texture_id = 1u;
 }
 
 static int sokol_webgpu_begin_frame(AstoniaRendererClearColor clear_color)
@@ -68,6 +345,10 @@ static int sokol_webgpu_begin_frame(AstoniaRendererClearColor clear_color)
 	pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
 	pass.action.colors[0].clear_value = (sg_color){clear_color.r, clear_color.g, clear_color.b, clear_color.a};
 	pass.swapchain = sglue_swapchain();
+	if (!pass.swapchain.invalid) {
+		g_sokol_webgpu.width = pass.swapchain.width;
+		g_sokol_webgpu.height = pass.swapchain.height;
+	}
 	sg_begin_pass(&pass);
 
 	return 1;
@@ -90,43 +371,156 @@ static int sokol_webgpu_frame_count(void)
 	return g_sokol_webgpu.frames;
 }
 
-/*
- * The contract is broader than the current clear-frame harness. Texture and
- * primitive operations fail explicitly until the WebGPU draw pipelines exist.
- */
+static void sokol_webgpu_destroy_texture(AstoniaRendererTexture texture);
+
 static AstoniaRendererTexture sokol_webgpu_create_texture(
     const AstoniaRendererTextureDesc *desc, const void *pixels, size_t pitch_bytes)
 {
-	(void)desc;
-	(void)pixels;
-	(void)pitch_bytes;
+	AstoniaRendererTexture texture = ASTONIA_RENDERER_TEXTURE_INVALID;
+	SokolTextureSlot *slot;
+	sg_image_desc image_desc = {0};
+	sg_view_desc view_desc = {0};
 
-	return ASTONIA_RENDERER_TEXTURE_INVALID;
+	if (!g_sokol_webgpu.initialized || !desc || desc->width <= 0 || desc->height <= 0 || !pixels ||
+	    pitch_bytes == 0u ||
+	    (desc->format != ASTONIA_RENDERER_TEXTURE_FORMAT_ARGB8888 &&
+	        desc->format != ASTONIA_RENDERER_TEXTURE_FORMAT_RGBA8888)) {
+		return texture;
+	}
+
+	slot = find_free_texture_slot();
+	if (!slot) {
+		return texture;
+	}
+
+	image_desc.width = desc->width;
+	image_desc.height = desc->height;
+	image_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
+	image_desc.usage.dynamic_update = true;
+	image_desc.label = "astonia-sprite-texture";
+	slot->image = sg_make_image(&image_desc);
+	if (sg_query_image_state(slot->image) != SG_RESOURCESTATE_VALID) {
+		memset(slot, 0, sizeof(*slot));
+		return texture;
+	}
+
+	view_desc.texture.image = slot->image;
+	view_desc.label = "astonia-sprite-texture-view";
+	slot->view = sg_make_view(&view_desc);
+	if (sg_query_view_state(slot->view) != SG_RESOURCESTATE_VALID) {
+		sg_destroy_image(slot->image);
+		memset(slot, 0, sizeof(*slot));
+		return texture;
+	}
+
+	slot->id = next_texture_id();
+	slot->width = desc->width;
+	slot->height = desc->height;
+	slot->source_format = desc->format;
+	texture.id = slot->id;
+
+	if (!update_texture_full(slot, desc, pixels, pitch_bytes)) {
+		sokol_webgpu_destroy_texture(texture);
+		return ASTONIA_RENDERER_TEXTURE_INVALID;
+	}
+
+	return texture;
 }
 
 static int sokol_webgpu_update_texture(
     AstoniaRendererTexture texture, const AstoniaRendererRect *rect, const void *pixels, size_t pitch_bytes)
 {
-	(void)texture;
-	(void)rect;
-	(void)pixels;
-	(void)pitch_bytes;
+	SokolTextureSlot *slot;
+	AstoniaRendererTextureDesc desc;
 
-	return 0;
+	if (!g_sokol_webgpu.initialized || !rect || !pixels || pitch_bytes == 0u) {
+		return 0;
+	}
+
+	slot = find_texture_slot(texture);
+	if (!slot) {
+		return 0;
+	}
+
+	if (rect->x != 0.0f || rect->y != 0.0f || rect->w != (float)slot->width || rect->h != (float)slot->height) {
+		return 0;
+	}
+
+	desc.width = slot->width;
+	desc.height = slot->height;
+	desc.format = slot->source_format;
+	return update_texture_full(slot, &desc, pixels, pitch_bytes);
 }
 
 static void sokol_webgpu_destroy_texture(AstoniaRendererTexture texture)
 {
-	(void)texture;
+	SokolTextureSlot *slot = find_texture_slot(texture);
+
+	if (!slot) {
+		return;
+	}
+
+	sg_destroy_view(slot->view);
+	sg_destroy_image(slot->image);
+	memset(slot, 0, sizeof(*slot));
 }
 
 static int sokol_webgpu_draw_textured_quad(
     AstoniaRendererTexture texture, const AstoniaRendererTexturedVertex vertices[4])
 {
-	(void)texture;
-	(void)vertices;
+	SokolTextureSlot *slot;
+	SpriteVertex sprite_vertices[SOKOL_SPRITE_VERTEX_COUNT];
+	SpriteVsParams params;
+	sg_bindings bindings = {0};
+	int vertex_offset;
 
-	return 0;
+	if (!g_sokol_webgpu.initialized || !vertices || !g_sokol_webgpu.sprite_pipeline.id ||
+	    !g_sokol_webgpu.sprite_vertex_buffer.id || !g_sokol_webgpu.sprite_sampler.id || g_sokol_webgpu.width <= 0 ||
+	    g_sokol_webgpu.height <= 0) {
+		return 0;
+	}
+
+	slot = find_texture_slot(texture);
+	if (!slot) {
+		return 0;
+	}
+
+	sprite_vertices[0] = (SpriteVertex){
+		.x = vertices[0].x, .y = vertices[0].y, .u = vertices[0].u, .v = vertices[0].v,
+		.r = vertices[0].color.r, .g = vertices[0].color.g, .b = vertices[0].color.b, .a = vertices[0].color.a};
+	sprite_vertices[1] = (SpriteVertex){
+		.x = vertices[1].x, .y = vertices[1].y, .u = vertices[1].u, .v = vertices[1].v,
+		.r = vertices[1].color.r, .g = vertices[1].color.g, .b = vertices[1].color.b, .a = vertices[1].color.a};
+	sprite_vertices[2] = (SpriteVertex){
+		.x = vertices[2].x, .y = vertices[2].y, .u = vertices[2].u, .v = vertices[2].v,
+		.r = vertices[2].color.r, .g = vertices[2].color.g, .b = vertices[2].color.b, .a = vertices[2].color.a};
+	sprite_vertices[3] = sprite_vertices[0];
+	sprite_vertices[4] = sprite_vertices[2];
+	sprite_vertices[5] = (SpriteVertex){
+		.x = vertices[3].x, .y = vertices[3].y, .u = vertices[3].u, .v = vertices[3].v,
+		.r = vertices[3].color.r, .g = vertices[3].color.g, .b = vertices[3].color.b, .a = vertices[3].color.a};
+
+	vertex_offset = sg_append_buffer(g_sokol_webgpu.sprite_vertex_buffer, SG_RANGE_REF(sprite_vertices));
+	if (sg_query_buffer_overflow(g_sokol_webgpu.sprite_vertex_buffer)) {
+		return 0;
+	}
+
+	params = (SpriteVsParams){
+		.screen_size = {(float)g_sokol_webgpu.width, (float)g_sokol_webgpu.height},
+		.pad = {0.0f, 0.0f},
+	};
+
+	bindings.vertex_buffers[0] = g_sokol_webgpu.sprite_vertex_buffer;
+	bindings.vertex_buffer_offsets[0] = vertex_offset;
+	bindings.views[0] = slot->view;
+	bindings.samplers[0] = g_sokol_webgpu.sprite_sampler;
+
+	sg_apply_pipeline(g_sokol_webgpu.sprite_pipeline);
+	sg_apply_uniforms(0, SG_RANGE_REF(params));
+	sg_apply_bindings(&bindings);
+	sg_draw(0, SOKOL_SPRITE_TRIANGLE_COUNT, 1);
+
+	return 1;
 }
 
 static int sokol_webgpu_fill_rect(const AstoniaRendererRect *rect, AstoniaRendererColor color)

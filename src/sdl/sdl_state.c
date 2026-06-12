@@ -72,6 +72,11 @@ static int g_render_offset_y = 0;
 static int g_gx1_zip_ready = 0;
 static int g_gx1_probe_sprite_ready = 0;
 
+void sdl_native_state_destroy_cache_resources(void) __attribute__((weak));
+void sdl_native_state_destroy_cache_resources(void)
+{
+}
+
 static unsigned int read_le16(const unsigned char *buffer)
 {
 	return (unsigned int)buffer[0] | ((unsigned int)buffer[1] << 8);
@@ -218,6 +223,7 @@ void sdl_native_state_reset_cache(void)
 {
 	int i;
 
+	sdl_native_state_destroy_cache_resources();
 	memset(sdlt, 0, sizeof(sdlt));
 	for (i = 0; i < MAX_TEXCACHE; i++) {
 		uint16_t *flags_ptr = (uint16_t *)&sdlt[i].flags;

@@ -189,6 +189,7 @@ extern long long sdl_time_pre3;
 extern int maxpanic;
 
 void sdl_native_state_reset_cache(void);
+void sdl_native_state_destroy_cache_resources(void);
 void sdl_native_state_configure_frame(int width, int height, int *render_offset_x, int *render_offset_y);
 int sdl_native_state_init(int width, int height);
 void sdl_native_state_shutdown(void);

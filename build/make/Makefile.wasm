@@ -20,7 +20,7 @@ WASM_PLATFORM_SRCS := \
 	src/wasm/astonia_net_wasm.c \
 	src/wasm/wasm_platform_shell.c \
 	src/wasm/wasm_audio_shell.c \
-	src/wasm/wasm_zip_shell.c \
+	src/wasm/wasm_zip.c \
 	src/wasm/sokol_sdl_renderer.c \
 	src/render_backend/sokol_webgpu_backend.c \
 	src/render_backend/sokol_webgpu_sokol.c

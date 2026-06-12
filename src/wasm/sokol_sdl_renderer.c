@@ -8,18 +8,25 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 
-#include "astonia.h"
 #include "dll.h"
+#include "render_backend/render_backend.h"
 #include "render_backend/sokol_webgpu_backend.h"
 #include "sdl/sdl.h"
+#include "sdl/sdl_private.h"
 #include "sdl/sdl_state.h"
 #include "wasm/wasm_platform_shell.h"
 
-DLL_EXPORT uint64_t game_options __attribute__((weak)) = GO_NOTSET;
-
 static const AstoniaRendererBackend *g_renderer;
 static bool g_frame_open;
+
+typedef struct sdl_backend_texture {
+	AstoniaRendererTexture texture;
+	int width;
+	int height;
+	uint8_t alpha;
+} SdlBackendTexture;
 
 int sdl_init(int width, int height, char *title, int monitor)
 {
@@ -31,8 +38,8 @@ int sdl_init(int width, int height, char *title, int monitor)
 	g_frame_open = false;
 	sdl_frames = 0;
 	if (!g_renderer->init(width, height, title, monitor)) {
-		g_renderer = 0;
 		astonia_wasm_platform_shell_shutdown();
+		g_renderer = 0;
 		return 0;
 	}
 	return 1;
@@ -45,11 +52,11 @@ void sdl_exit(void)
 	}
 	g_frame_open = false;
 
+	astonia_wasm_platform_shell_shutdown();
 	if (g_renderer) {
 		g_renderer->shutdown();
 	}
 	g_renderer = 0;
-	astonia_wasm_platform_shell_shutdown();
 }
 
 int sdl_clear(void)
@@ -108,4 +115,117 @@ DLL_EXPORT int astonia_wasm_native_state_probe_sprite(int sprite)
 	}
 
 	return sdl_native_resource_probe_sprite((unsigned int)sprite);
+}
+
+SDL_Texture *sdl_backend_create_texture_from_argb8888(
+    int width, int height, const uint32_t *pixels, size_t pitch_bytes)
+{
+	SdlBackendTexture *texture;
+	uint8_t *rgba;
+	AstoniaRendererTextureDesc desc;
+	AstoniaRendererTexture renderer_texture;
+	size_t row_bytes;
+
+	if (!g_renderer || !g_renderer->create_texture || width <= 0 || height <= 0 || !pixels ||
+	    !sdl_backend_argb8888_pitch_is_valid(width, pitch_bytes)) {
+		return NULL;
+	}
+
+	row_bytes = (size_t)width * 4u;
+	rgba = malloc(row_bytes * (size_t)height);
+	if (!rgba) {
+		return NULL;
+	}
+
+	for (int y = 0; y < height; y++) {
+		const uint8_t *row = (const uint8_t *)pixels + (size_t)y * pitch_bytes;
+		astonia_renderer_argb8888_to_rgba8888(rgba + (size_t)y * row_bytes, (const uint32_t *)row, (size_t)width);
+	}
+
+	desc.width = width;
+	desc.height = height;
+	desc.format = ASTONIA_RENDERER_TEXTURE_FORMAT_RGBA8888;
+	renderer_texture = g_renderer->create_texture(&desc, rgba, row_bytes);
+	free(rgba);
+	if (renderer_texture.id == ASTONIA_RENDERER_TEXTURE_INVALID.id) {
+		return NULL;
+	}
+
+	texture = malloc(sizeof(*texture));
+	if (!texture) {
+		g_renderer->destroy_texture(renderer_texture);
+		return NULL;
+	}
+
+	texture->texture = renderer_texture;
+	texture->width = width;
+	texture->height = height;
+	texture->alpha = 255u;
+	return (SDL_Texture *)texture;
+}
+
+void sdl_backend_destroy_texture(SDL_Texture *raw_texture)
+{
+	SdlBackendTexture *texture = (SdlBackendTexture *)raw_texture;
+
+	if (!texture) {
+		return;
+	}
+	if (g_renderer && g_renderer->destroy_texture && texture->texture.id != ASTONIA_RENDERER_TEXTURE_INVALID.id) {
+		g_renderer->destroy_texture(texture->texture);
+	}
+	free(texture);
+}
+
+int sdl_backend_get_texture_size(SDL_Texture *raw_texture, float *width, float *height)
+{
+	SdlBackendTexture *texture = (SdlBackendTexture *)raw_texture;
+
+	if (!texture) {
+		return 0;
+	}
+	if (width) {
+		*width = (float)texture->width;
+	}
+	if (height) {
+		*height = (float)texture->height;
+	}
+	return 1;
+}
+
+int sdl_backend_set_texture_alpha(SDL_Texture *raw_texture, uint8_t alpha)
+{
+	SdlBackendTexture *texture = (SdlBackendTexture *)raw_texture;
+
+	if (!texture) {
+		return 0;
+	}
+	texture->alpha = alpha;
+	return 1;
+}
+
+int sdl_backend_blit_texture(SDL_Texture *raw_texture, const SdlBackendRect *src, const SdlBackendRect *dst)
+{
+	SdlBackendTexture *texture = (SdlBackendTexture *)raw_texture;
+	AstoniaRendererTexturedVertex vertices[4];
+	AstoniaRendererColor color;
+	float u0, v0, u1, v1;
+
+	if (!g_renderer || !g_renderer->draw_textured_quad || !texture || !src || !dst || texture->width <= 0 ||
+	    texture->height <= 0 || dst->w <= 0.0f || dst->h <= 0.0f) {
+		return 0;
+	}
+
+	u0 = src->x / (float)texture->width;
+	v0 = src->y / (float)texture->height;
+	u1 = (src->x + src->w) / (float)texture->width;
+	v1 = (src->y + src->h) / (float)texture->height;
+	color = (AstoniaRendererColor){255u, 255u, 255u, texture->alpha};
+
+	vertices[0] = (AstoniaRendererTexturedVertex){dst->x, dst->y, u0, v0, color};
+	vertices[1] = (AstoniaRendererTexturedVertex){dst->x + dst->w, dst->y, u1, v0, color};
+	vertices[2] = (AstoniaRendererTexturedVertex){dst->x + dst->w, dst->y + dst->h, u1, v1, color};
+	vertices[3] = (AstoniaRendererTexturedVertex){dst->x, dst->y + dst->h, u0, v1, color};
+
+	return g_renderer->draw_textured_quad(texture->texture, vertices);
 }

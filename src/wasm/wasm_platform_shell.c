@@ -45,16 +45,84 @@ uint64_t sdl_backgnd_wait = 0;
 uint64_t sdl_backgnd_work = 0;
 uint64_t sdl_backgnd_jobs = 0;
 
+static void close_sprite_archives(void)
+{
+	if (sdl_zip1m) {
+		zip_close(sdl_zip1m);
+		sdl_zip1m = NULL;
+	}
+	if (sdl_zip1p) {
+		zip_close(sdl_zip1p);
+		sdl_zip1p = NULL;
+	}
+	if (sdl_zip1) {
+		zip_close(sdl_zip1);
+		sdl_zip1 = NULL;
+	}
+	if (sdl_zip2m) {
+		zip_close(sdl_zip2m);
+		sdl_zip2m = NULL;
+	}
+	if (sdl_zip2p) {
+		zip_close(sdl_zip2p);
+		sdl_zip2p = NULL;
+	}
+	if (sdl_zip2) {
+		zip_close(sdl_zip2);
+		sdl_zip2 = NULL;
+	}
+}
+
+static void open_sprite_archives(void)
+{
+	close_sprite_archives();
+
+	sdl_zip1 = zip_open("res/gx1.zip", ZIP_RDONLY, NULL);
+	sdl_zip1p = zip_open("res/gx1_patch.zip", ZIP_RDONLY, NULL);
+	sdl_zip1m = zip_open("res/gx1_mod.zip", ZIP_RDONLY, NULL);
+
+	switch (sdl_scale) {
+	case 2:
+		sdl_zip2 = zip_open("res/gx2.zip", ZIP_RDONLY, NULL);
+		sdl_zip2p = zip_open("res/gx2_patch.zip", ZIP_RDONLY, NULL);
+		sdl_zip2m = zip_open("res/gx2_mod.zip", ZIP_RDONLY, NULL);
+		break;
+	case 3:
+		sdl_zip2 = zip_open("res/gx3.zip", ZIP_RDONLY, NULL);
+		sdl_zip2p = zip_open("res/gx3_patch.zip", ZIP_RDONLY, NULL);
+		sdl_zip2m = zip_open("res/gx3_mod.zip", ZIP_RDONLY, NULL);
+		break;
+	case 4:
+		sdl_zip2 = zip_open("res/gx4.zip", ZIP_RDONLY, NULL);
+		sdl_zip2p = zip_open("res/gx4_patch.zip", ZIP_RDONLY, NULL);
+		sdl_zip2m = zip_open("res/gx4_mod.zip", ZIP_RDONLY, NULL);
+		break;
+	default:
+		break;
+	}
+}
+
 int astonia_wasm_platform_shell_init(int width, int height)
 {
 	sdl_multi = 0;
 	SDL_SetAtomicInt(&worker_quit, 0);
-	return sdl_native_state_init(width, height);
+	if (!sdl_native_state_init(width, height)) {
+		return 0;
+	}
+
+	open_sprite_archives();
+	if (!sdl_zip1) {
+		close_sprite_archives();
+		sdl_native_state_shutdown();
+		return 0;
+	}
+	return 1;
 }
 
 void astonia_wasm_platform_shell_shutdown(void)
 {
 	sdl_native_state_shutdown();
+	close_sprite_archives();
 	SDL_SetAtomicInt(&worker_quit, 1);
 	worker_threads = NULL;
 	worker_zips = NULL;

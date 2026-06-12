@@ -108,4 +108,15 @@ typedef struct astonia_renderer_backend {
 	AstoniaRendererBlendMode (*get_blend_mode)(void);
 } AstoniaRendererBackend;
 
+static inline void astonia_renderer_argb8888_to_rgba8888(uint8_t *dst, const uint32_t *src, size_t pixel_count)
+{
+	for (size_t i = 0; i < pixel_count; i++) {
+		const uint32_t pixel = src[i];
+		dst[i * 4u + 0u] = (uint8_t)((pixel >> 16u) & 0xffu);
+		dst[i * 4u + 1u] = (uint8_t)((pixel >> 8u) & 0xffu);
+		dst[i * 4u + 2u] = (uint8_t)(pixel & 0xffu);
+		dst[i * 4u + 3u] = (uint8_t)((pixel >> 24u) & 0xffu);
+	}
+}
+
 #endif
