@@ -59,13 +59,14 @@ TEST_SERIALIZED = $(BIN_DIR)/test_serialized
 TEST_CONCURRENT = $(BIN_DIR)/test_concurrent
 TEST_HASH_DIAG = $(BIN_DIR)/test_hash_distribution
 TEST_RENDER_PRIMS = $(BIN_DIR)/test_render_primitives
+TEST_PRIMITIVE_BACKEND_ROUTE = $(BIN_DIR)/test_primitive_backend_route
 TEST_SPRITE_BACKEND_BLIT = $(BIN_DIR)/test_sprite_backend_blit
 TEST_TEXT_BACKEND_RENDER = $(BIN_DIR)/test_text_backend_render
 TEST_SPRITE_CONFIG = $(BIN_DIR)/test_sprite_config
 TEST_RENDERER_BACKEND_CONTRACT = $(BIN_DIR)/test_renderer_backend_contract
 TEST_NATIVE_LIFECYCLE_API = $(BIN_DIR)/test_native_lifecycle_api.o
 
-all: $(TEST_RENDERER_BACKEND_CONTRACT) $(TEST_NATIVE_LIFECYCLE_API) $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_BACKEND_BLIT) $(TEST_TEXT_BACKEND_RENDER) $(TEST_SPRITE_CONFIG)
+all: $(TEST_RENDERER_BACKEND_CONTRACT) $(TEST_NATIVE_LIFECYCLE_API) $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_PRIMITIVE_BACKEND_ROUTE) $(TEST_SPRITE_BACKEND_BLIT) $(TEST_TEXT_BACKEND_RENDER) $(TEST_SPRITE_CONFIG)
 test: run
 
 $(TEST_SERIALIZED): test_texture_cache.c $(ALL_SRCS)
@@ -83,6 +84,10 @@ $(TEST_HASH_DIAG): test_hash_distribution.c $(ALL_SRCS)
 $(TEST_RENDER_PRIMS): test_render_primitives.c $(ALL_SRCS)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+$(TEST_PRIMITIVE_BACKEND_ROUTE): test_primitive_backend_route.c $(ALL_SRCS)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) -DSDL_RENDER_BACKEND_TEXTURES_FOR_TEST $^ -o $@ $(LDFLAGS)
 
 $(TEST_SPRITE_BACKEND_BLIT): test_sprite_backend_blit.c $(ALL_SRCS) ../src/render_backend/render_backend.h
 	@mkdir -p $(BIN_DIR)
@@ -139,6 +144,13 @@ test_render_prims: $(TEST_RENDER_PRIMS)
 	@echo "==============================================="
 	cd .. && ./bin/test_render_primitives
 
+test_primitive_backend_route: $(TEST_PRIMITIVE_BACKEND_ROUTE)
+	@echo ""
+	@echo "==============================================="
+	@echo "Running primitive backend route tests..."
+	@echo "==============================================="
+	cd .. && ./bin/test_primitive_backend_route
+
 test_sprite_backend_blit: $(TEST_SPRITE_BACKEND_BLIT)
 	@echo ""
 	@echo "==============================================="
@@ -177,7 +189,7 @@ test_native_lifecycle_api: $(TEST_NATIVE_LIFECYCLE_API)
 	@echo "Native lifecycle API compile check passed"
 
 # Run all tests in sequence
-run: test_renderer_backend_contract test_native_lifecycle_api test_serialized test_concurrent test_hash_diag test_render_prims test_sprite_backend_blit test_text_backend_render test_sprite_config
+run: test_renderer_backend_contract test_native_lifecycle_api test_serialized test_concurrent test_hash_diag test_render_prims test_primitive_backend_route test_sprite_backend_blit test_text_backend_render test_sprite_config
 	@echo ""
 	@echo "==============================================="
 	@echo "All tests passed!"
@@ -185,7 +197,7 @@ run: test_renderer_backend_contract test_native_lifecycle_api test_serialized te
 
 clean:
 	rm -f $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_CONFIG) \
-		$(TEST_SPRITE_BACKEND_BLIT) $(TEST_TEXT_BACKEND_RENDER) $(TEST_RENDERER_BACKEND_CONTRACT) \
+		$(TEST_PRIMITIVE_BACKEND_ROUTE) $(TEST_SPRITE_BACKEND_BLIT) $(TEST_TEXT_BACKEND_RENDER) $(TEST_RENDERER_BACKEND_CONTRACT) \
 		$(TEST_NATIVE_LIFECYCLE_API) *.o
 
-.PHONY: all clean run test_serialized test_concurrent test_render_prims test_sprite_backend_blit test_text_backend_render test_sprite_config test_renderer_backend_contract test_native_lifecycle_api
+.PHONY: all clean run test_serialized test_concurrent test_render_prims test_primitive_backend_route test_sprite_backend_blit test_text_backend_render test_sprite_config test_renderer_backend_contract test_native_lifecycle_api

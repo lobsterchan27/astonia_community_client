@@ -44,6 +44,59 @@
 // Current blend mode for rendering operations (used by all drawing functions)
 static SDL_BlendMode current_blend_mode = SDL_BLENDMODE_BLEND;
 
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+static int sdl_draw_backend_point(float x, float y, int r, int g, int b, int a)
+{
+	SdlBackendPoint point = {
+		.x = x,
+		.y = y,
+	};
+
+	return sdl_backend_draw_points(&point, 1u, (uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)a);
+}
+
+static int sdl_draw_backend_points(const SDL_FPoint *points, int count, int r, int g, int b, int a)
+{
+	if (count <= 0) {
+		return 0;
+	}
+	return sdl_backend_draw_points(
+	    points, (size_t)count, (uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)a);
+}
+
+static int sdl_draw_backend_line(float x0, float y0, float x1, float y1, int r, int g, int b, int a)
+{
+	const SdlBackendLine line = {
+		.x0 = x0,
+		.y0 = y0,
+		.x1 = x1,
+		.y1 = y1,
+	};
+
+	return sdl_backend_draw_lines(&line, 1u, (uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)a);
+}
+#endif
+
+static void sdl_draw_colored_point(int r, int g, int b, int a, float x, float y)
+{
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_draw_backend_point(x, y, r, g, b, a);
+#else
+	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a);
+	SDL_RenderPoint(sdlren, x, y);
+#endif
+}
+
+static void sdl_draw_colored_points(int r, int g, int b, int a, const SDL_FPoint *points, int count)
+{
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_draw_backend_points(points, count, r, g, b, a);
+#else
+	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a);
+	SDL_RenderPoints(sdlren, points, count);
+#endif
+}
+
 static void sdl_blit_tex(
     SDL_Texture *tex, int sx, int sy, int clipsx, int clipsy, int clipex, int clipey, int x_offset, int y_offset)
 {
@@ -270,7 +323,11 @@ void sdl_rect(int sx, int sy, int ex, int ey, unsigned short int color, int clip
     int x_offset, int y_offset)
 {
 	int r, g, b, a;
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	SdlBackendRect rc;
+#else
 	SDL_FRect rc;
+#endif
 
 	r = R16TO32(color);
 	g = G16TO32(color);
@@ -299,15 +356,23 @@ void sdl_rect(int sx, int sy, int ex, int ey, unsigned short int color, int clip
 	rc.y = (float)((sy + y_offset) * sdl_scale);
 	rc.h = (float)((ey - sy) * sdl_scale);
 
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_backend_fill_rect(&rc, (uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)a);
+#else
 	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a);
 	SDL_RenderFillRect(sdlren, &rc);
+#endif
 }
 
 void sdl_shaded_rect(int sx, int sy, int ex, int ey, unsigned short int color, unsigned short alpha, int clipsx,
     int clipsy, int clipex, int clipey, int x_offset, int y_offset)
 {
 	int r, g, b, a;
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	SdlBackendRect rc;
+#else
 	SDL_FRect rc;
+#endif
 
 	r = R16TO32(color);
 	g = G16TO32(color);
@@ -336,9 +401,13 @@ void sdl_shaded_rect(int sx, int sy, int ex, int ey, unsigned short int color, u
 	rc.y = (float)((sy + y_offset) * sdl_scale);
 	rc.h = (float)((ey - sy) * sdl_scale);
 
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_backend_fill_rect(&rc, (uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)a);
+#else
 	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a);
 	SDL_SetRenderDrawBlendMode(sdlren, current_blend_mode);
 	SDL_RenderFillRect(sdlren, &rc);
+#endif
 }
 
 void sdl_pixel(int x, int y, unsigned short color, int x_offset, int y_offset)
@@ -351,11 +420,20 @@ void sdl_pixel(int x, int y, unsigned short color, int x_offset, int y_offset)
 	b = B16TO32(color);
 	a = 255;
 
+#ifndef SDL_USE_RENDER_BACKEND_TEXTURES
 	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a);
+#endif
 	switch (sdl_scale) {
 	case 1:
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+		pt[0].x = (float)(x + x_offset);
+		pt[0].y = (float)(y + y_offset);
+		i = 1;
+		break;
+#else
 		SDL_RenderPoint(sdlren, (float)(x + x_offset), (float)(y + y_offset));
 		return;
+#endif
 	case 2:
 		pt[0].x = (float)((x + x_offset) * sdl_scale);
 		pt[0].y = (float)((y + y_offset) * sdl_scale);
@@ -427,7 +505,11 @@ void sdl_pixel(int x, int y, unsigned short color, int x_offset, int y_offset)
 		warn("unsupported scale %d in sdl_pixel()", sdl_scale);
 		return;
 	}
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_draw_backend_points(pt, i, r, g, b, a);
+#else
 	SDL_RenderPoints(sdlren, pt, i);
+#endif
 }
 
 void sdl_pretty_pixel(int x, int y, unsigned short color, int x_offset, int y_offset)
@@ -445,12 +527,10 @@ void sdl_pretty_pixel(int x, int y, unsigned short color, int x_offset, int y_of
 
 	switch (sdl_scale) {
 	case 1:
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)255);
-		SDL_RenderPoint(sdlren, px, py);
+		sdl_draw_colored_point(r, g, b, 255, px, py);
 		break;
 	case 2:
-		SDL_SetRenderDrawColor(sdlren, (Uint8)min(r + 64, 255), (Uint8)min(g + 64, 255), (Uint8)min(b + 64, 255), 255);
-		SDL_RenderPoint(sdlren, px, py);
+		sdl_draw_colored_point(min(r + 64, 255), min(g + 64, 255), min(b + 64, 255), 255, px, py);
 
 		pt[0].x = px + 1.0f;
 		pt[0].y = py;
@@ -464,8 +544,7 @@ void sdl_pretty_pixel(int x, int y, unsigned short color, int x_offset, int y_of
 		pt[3].x = px;
 		pt[3].y = py - 1.0f;
 
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)128);
-		SDL_RenderPoints(sdlren, pt, 4);
+		sdl_draw_colored_points(r, g, b, 128, pt, 4);
 
 		pt[0].x = px + 2.0f;
 		pt[0].y = py;
@@ -491,13 +570,11 @@ void sdl_pretty_pixel(int x, int y, unsigned short color, int x_offset, int y_of
 		pt[7].x = px - 1.0f;
 		pt[7].y = py - 1.0f;
 
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)64);
-		SDL_RenderPoints(sdlren, pt, 8);
+		sdl_draw_colored_points(r, g, b, 64, pt, 8);
 		break;
 	case 3:
 	case 4:
-		SDL_SetRenderDrawColor(sdlren, (Uint8)min(r + 64, 255), (Uint8)min(g + 64, 255), (Uint8)min(b + 64, 255), 255);
-		SDL_RenderPoint(sdlren, px, py);
+		sdl_draw_colored_point(min(r + 64, 255), min(g + 64, 255), min(b + 64, 255), 255, px, py);
 
 		pt[0].x = px + 1.0f;
 		pt[0].y = py;
@@ -511,9 +588,8 @@ void sdl_pretty_pixel(int x, int y, unsigned short color, int x_offset, int y_of
 		pt[3].x = px;
 		pt[3].y = py - 1.0f;
 
-		SDL_SetRenderDrawColor(sdlren, (Uint8)min(r + 32, 255), (Uint8)min(g + 32, 255), (Uint8)min(b + 32, 255),
-		    sdl_scale == 4 ? 192 : 128);
-		SDL_RenderPoints(sdlren, pt, 4);
+		sdl_draw_colored_points(
+		    min(r + 32, 255), min(g + 32, 255), min(b + 32, 255), sdl_scale == 4 ? 192 : 128, pt, 4);
 
 		pt[0].x = px + 2.0f;
 		pt[0].y = py;
@@ -539,8 +615,7 @@ void sdl_pretty_pixel(int x, int y, unsigned short color, int x_offset, int y_of
 		pt[7].x = px - 1.0f;
 		pt[7].y = py - 1.0f;
 
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)sdl_scale == 4 ? 128 : 64);
-		SDL_RenderPoints(sdlren, pt, 8);
+		sdl_draw_colored_points(r, g, b, sdl_scale == 4 ? 128 : 64, pt, 8);
 
 		pt[0].x = px + 3.0f;
 		pt[0].y = py;
@@ -578,8 +653,7 @@ void sdl_pretty_pixel(int x, int y, unsigned short color, int x_offset, int y_of
 		pt[11].x = px - 1.0f;
 		pt[11].y = py - 2.0f;
 
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)sdl_scale == 4 ? 64 : 32);
-		SDL_RenderPoints(sdlren, pt, 12);
+		sdl_draw_colored_points(r, g, b, sdl_scale == 4 ? 64 : 32, pt, 12);
 		break;
 	default:
 		warn("unsupported scale %d in sdl_pixel()", sdl_scale);
@@ -602,13 +676,11 @@ void sdl_rain_pixel(int x, int y, unsigned short color, int x_offset, int y_offs
 
 	switch (sdl_scale) {
 	case 1:
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)255);
-		SDL_RenderPoint(sdlren, px, py);
+		sdl_draw_colored_point(r, g, b, 255, px, py);
 		break;
 	case 2:
-		SDL_SetRenderDrawColor(sdlren, (Uint8)min(r + 64, 255), (Uint8)min(g + 64, 255), (Uint8)min(b + 64, 255), 255);
-		SDL_RenderPoint(sdlren, px, py);
-		SDL_RenderPoint(sdlren, px, py - 1.0f);
+		sdl_draw_colored_point(min(r + 64, 255), min(g + 64, 255), min(b + 64, 255), 255, px, py);
+		sdl_draw_colored_point(min(r + 64, 255), min(g + 64, 255), min(b + 64, 255), 255, px, py - 1.0f);
 
 		pt[0].x = px + 1.0f;
 		pt[0].y = py;
@@ -622,8 +694,7 @@ void sdl_rain_pixel(int x, int y, unsigned short color, int x_offset, int y_offs
 		pt[3].x = px;
 		pt[3].y = py - 2.0f;
 
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)128);
-		SDL_RenderPoints(sdlren, pt, 4);
+		sdl_draw_colored_points(r, g, b, 128, pt, 4);
 
 		pt[0].x = px + 1.0f;
 		pt[0].y = py - 1.0f;
@@ -640,14 +711,12 @@ void sdl_rain_pixel(int x, int y, unsigned short color, int x_offset, int y_offs
 		pt[4].x = px;
 		pt[4].y = py - 3.0f;
 
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)64);
-		SDL_RenderPoints(sdlren, pt, 5);
+		sdl_draw_colored_points(r, g, b, 64, pt, 5);
 		break;
 	case 3:
 	case 4:
-		SDL_SetRenderDrawColor(sdlren, (Uint8)min(r + 64, 255), (Uint8)min(g + 64, 255), (Uint8)min(b + 64, 255), 255);
-		SDL_RenderPoint(sdlren, px, py);
-		SDL_RenderPoint(sdlren, px, py - 1.0f);
+		sdl_draw_colored_point(min(r + 64, 255), min(g + 64, 255), min(b + 64, 255), 255, px, py);
+		sdl_draw_colored_point(min(r + 64, 255), min(g + 64, 255), min(b + 64, 255), 255, px, py - 1.0f);
 
 		pt[0].x = px + 1.0f;
 		pt[0].y = py;
@@ -661,9 +730,8 @@ void sdl_rain_pixel(int x, int y, unsigned short color, int x_offset, int y_offs
 		pt[3].x = px;
 		pt[3].y = py - 2.0f;
 
-		SDL_SetRenderDrawColor(sdlren, (Uint8)min(r + 32, 255), (Uint8)min(g + 32, 255), (Uint8)min(b + 32, 255),
-		    sdl_scale == 4 ? 192 : 128);
-		SDL_RenderPoints(sdlren, pt, 4);
+		sdl_draw_colored_points(
+		    min(r + 32, 255), min(g + 32, 255), min(b + 32, 255), sdl_scale == 4 ? 192 : 128, pt, 4);
 
 		pt[0].x = px + 1.0f;
 		pt[0].y = py - 1.0f;
@@ -680,8 +748,7 @@ void sdl_rain_pixel(int x, int y, unsigned short color, int x_offset, int y_offs
 		pt[4].x = px;
 		pt[4].y = py - 3.0f;
 
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)sdl_scale == 4 ? 128 : 64);
-		SDL_RenderPoints(sdlren, pt, 5);
+		sdl_draw_colored_points(r, g, b, sdl_scale == 4 ? 128 : 64, pt, 5);
 		pt[0].x = px + 2.0f;
 		pt[0].y = py - 1.0f;
 
@@ -705,8 +772,7 @@ void sdl_rain_pixel(int x, int y, unsigned short color, int x_offset, int y_offs
 
 		pt[7].x = px - 2.0f;
 		pt[7].y = py - 3.0f;
-		SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)sdl_scale == 4 ? 64 : 32);
-		SDL_RenderPoints(sdlren, pt, 8);
+		sdl_draw_colored_points(r, g, b, sdl_scale == 4 ? 64 : 32, pt, 8);
 
 		break;
 	default:
@@ -756,10 +822,15 @@ void sdl_line(int fx, int fy, int tx, int ty, unsigned short color, int clipsx, 
 	fy += y_offset;
 	ty += y_offset;
 
-	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a);
 	// TODO: This is a thinner line when scaled up. It looks surprisingly good. Maybe keep it this way?
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_draw_backend_line((float)(fx * sdl_scale), (float)(fy * sdl_scale), (float)(tx * sdl_scale),
+	    (float)(ty * sdl_scale), r, g, b, a);
+#else
+	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a);
 	SDL_RenderLine(
 	    sdlren, (float)(fx * sdl_scale), (float)(fy * sdl_scale), (float)(tx * sdl_scale), (float)(ty * sdl_scale));
+#endif
 }
 
 void sdl_bargraph_add(int dx, unsigned char *data, int val)
@@ -774,13 +845,26 @@ void sdl_bargraph(int sx, int sy, int dx, unsigned char *data, int x_offset, int
 
 	for (n = 0; n < dx; n++) {
 		if (data[n] > 40) {
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+			(void)sdl_draw_backend_line((float)((sx + n + x_offset) * sdl_scale),
+			    (float)((sy + y_offset) * sdl_scale), (float)((sx + n + x_offset) * sdl_scale),
+			    (float)((sy - data[n] + y_offset) * sdl_scale), 255, 80, 80, 127);
+#else
 			SDL_SetRenderDrawColor(sdlren, 255, 80, 80, 127);
+			SDL_RenderLine(sdlren, (float)((sx + n + x_offset) * sdl_scale), (float)((sy + y_offset) * sdl_scale),
+			    (float)((sx + n + x_offset) * sdl_scale), (float)((sy - data[n] + y_offset) * sdl_scale));
+#endif
 		} else {
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+			(void)sdl_draw_backend_line((float)((sx + n + x_offset) * sdl_scale),
+			    (float)((sy + y_offset) * sdl_scale), (float)((sx + n + x_offset) * sdl_scale),
+			    (float)((sy - data[n] + y_offset) * sdl_scale), 80, 255, 80, 127);
+#else
 			SDL_SetRenderDrawColor(sdlren, 80, 255, 80, 127);
+			SDL_RenderLine(sdlren, (float)((sx + n + x_offset) * sdl_scale), (float)((sy + y_offset) * sdl_scale),
+			    (float)((sx + n + x_offset) * sdl_scale), (float)((sy - data[n] + y_offset) * sdl_scale));
+#endif
 		}
-
-		SDL_RenderLine(sdlren, (float)((sx + n + x_offset) * sdl_scale), (float)((sy + y_offset) * sdl_scale),
-		    (float)((sx + n + x_offset) * sdl_scale), (float)((sy - data[n] + y_offset) * sdl_scale));
 	}
 }
 
@@ -793,12 +877,21 @@ void sdl_pixel_alpha(int x, int y, unsigned short color, unsigned char alpha, in
 	g = G16TO32(color);
 	b = B16TO32(color);
 
+#ifndef SDL_USE_RENDER_BACKEND_TEXTURES
 	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)alpha);
 	SDL_SetRenderDrawBlendMode(sdlren, current_blend_mode);
+#endif
 	switch (sdl_scale) {
 	case 1:
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+		pt[0].x = (float)(x + x_offset);
+		pt[0].y = (float)(y + y_offset);
+		i = 1;
+		break;
+#else
 		SDL_RenderPoint(sdlren, (float)(x + x_offset), (float)(y + y_offset));
 		return;
+#endif
 	case 2:
 		pt[0].x = (float)((x + x_offset) * sdl_scale);
 		pt[0].y = (float)((y + y_offset) * sdl_scale);
@@ -870,7 +963,11 @@ void sdl_pixel_alpha(int x, int y, unsigned short color, unsigned char alpha, in
 		warn("unsupported scale %d in sdl_pixel_alpha()", sdl_scale);
 		return;
 	}
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_draw_backend_points(pt, i, r, g, b, alpha);
+#else
 	SDL_RenderPoints(sdlren, pt, i);
+#endif
 }
 
 // Cohen-Sutherland outcodes for line clipping
@@ -987,35 +1084,52 @@ void sdl_line_alpha(int fx, int fy, int tx, int ty, unsigned short color, unsign
 	fy += y_offset;
 	ty += y_offset;
 
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_draw_backend_line((float)(fx * sdl_scale), (float)(fy * sdl_scale), (float)(tx * sdl_scale),
+	    (float)(ty * sdl_scale), r, g, b, alpha);
+#else
 	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)alpha);
 	SDL_SetRenderDrawBlendMode(sdlren, current_blend_mode);
 	SDL_RenderLine(
 	    sdlren, (float)(fx * sdl_scale), (float)(fy * sdl_scale), (float)(tx * sdl_scale), (float)(ty * sdl_scale));
+#endif
 }
 
 void sdl_set_blend_mode(int mode)
 {
+	int backend_mode;
+
 	switch (mode) {
 	case 0: // BLEND_NORMAL
 		current_blend_mode = SDL_BLENDMODE_BLEND;
+		backend_mode = 0;
 		break;
 	case 1: // BLEND_ADDITIVE
 		current_blend_mode = SDL_BLENDMODE_ADD;
+		backend_mode = 1;
 		break;
 	case 2: // BLEND_MOD
 		current_blend_mode = SDL_BLENDMODE_MOD;
+		backend_mode = 2;
 		break;
 	case 3: // BLEND_MUL
 		current_blend_mode = SDL_BLENDMODE_MUL;
+		backend_mode = 3;
 		break;
 	case 4: // BLEND_NONE
 		current_blend_mode = SDL_BLENDMODE_NONE;
+		backend_mode = 4;
 		break;
 	default:
 		current_blend_mode = SDL_BLENDMODE_BLEND;
+		backend_mode = 0;
 		break;
 	}
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_backend_set_blend_mode(backend_mode);
+#else
 	SDL_SetRenderDrawBlendMode(sdlren, current_blend_mode);
+#endif
 }
 
 int sdl_get_blend_mode(void)
@@ -1039,7 +1153,11 @@ int sdl_get_blend_mode(void)
 void sdl_reset_blend_mode(void)
 {
 	current_blend_mode = SDL_BLENDMODE_BLEND;
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	(void)sdl_backend_set_blend_mode(0);
+#else
 	SDL_SetRenderDrawBlendMode(sdlren, current_blend_mode);
+#endif
 }
 
 // ============================================================================
@@ -1853,14 +1971,25 @@ void sdl_rect_outline_alpha(int sx, int sy, int ex, int ey, unsigned short color
 		return;
 	}
 
+#ifndef SDL_USE_RENDER_BACKEND_TEXTURES
 	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)alpha);
 	SDL_SetRenderDrawBlendMode(sdlren, current_blend_mode);
+#endif
 
 	float fsx = (float)((sx + x_offset) * sdl_scale);
 	float fsy = (float)((sy + y_offset) * sdl_scale);
 	float fex = (float)((ex + x_offset) * sdl_scale - 1);
 	float fey = (float)((ey + y_offset) * sdl_scale - 1);
 
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+	SdlBackendLine lines[4] = {
+	    {fsx, fsy, fex, fsy},
+	    {fex, fsy, fex, fey},
+	    {fex, fey, fsx, fey},
+	    {fsx, fey, fsx, fsy},
+	};
+	(void)sdl_backend_draw_lines(lines, 4u, (uint8_t)r, (uint8_t)g, (uint8_t)b, (uint8_t)alpha);
+#else
 	// Draw closed rectangle outline with single batch call (5 points for closed loop)
 	SDL_FPoint pts[5] = {
 	    {fsx, fsy}, // Top-left
@@ -1870,6 +1999,7 @@ void sdl_rect_outline_alpha(int sx, int sy, int ex, int ey, unsigned short color
 	    {fsx, fsy} // Back to top-left (close the loop)
 	};
 	SDL_RenderLines(sdlren, pts, 5);
+#endif
 }
 
 void sdl_rounded_rect_alpha(int sx, int sy, int ex, int ey, int radius, unsigned short color, unsigned char alpha,
@@ -1909,7 +2039,9 @@ void sdl_rounded_rect_alpha(int sx, int sy, int ex, int ey, int radius, unsigned
 	}
 
 	SDL_SetRenderDrawColor(sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)alpha);
+#ifndef SDL_USE_RENDER_BACKEND_TEXTURES
 	SDL_SetRenderDrawBlendMode(sdlren, current_blend_mode);
+#endif
 
 	int osx = (sx + x_offset) * sdl_scale;
 	int osy = (sy + y_offset) * sdl_scale;
@@ -2504,7 +2636,9 @@ void sdl_line_aa(int x0, int y0, int x1, int y1, unsigned short color, unsigned 
 	x1 = (x1 + x_offset) * sdl_scale;
 	y1 = (y1 + y_offset) * sdl_scale;
 
+#ifndef SDL_USE_RENDER_BACKEND_TEXTURES
 	SDL_SetRenderDrawBlendMode(sdlren, current_blend_mode);
+#endif
 
 	int steep = abs(y1 - y0) > abs(x1 - x0);
 	if (steep) {
@@ -2536,19 +2670,15 @@ void sdl_line_aa(int x0, int y0, int x1, int y1, unsigned short color, unsigned 
 	int ypxl1 = (int)floorf(yend);
 
 	if (steep) {
-		SDL_SetRenderDrawColor(
-		    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (1.0f - (yend - floorf(yend))) * xgap));
-		SDL_RenderPoint(sdlren, (float)ypxl1, (float)xpxl1);
-		SDL_SetRenderDrawColor(
-		    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (yend - floorf(yend)) * xgap));
-		SDL_RenderPoint(sdlren, (float)(ypxl1 + 1), (float)xpxl1);
+		sdl_draw_colored_point(r, g, b, (int)((float)alpha * (1.0f - (yend - floorf(yend))) * xgap), (float)ypxl1,
+		    (float)xpxl1);
+		sdl_draw_colored_point(
+		    r, g, b, (int)((float)alpha * (yend - floorf(yend)) * xgap), (float)(ypxl1 + 1), (float)xpxl1);
 	} else {
-		SDL_SetRenderDrawColor(
-		    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (1.0f - (yend - floorf(yend))) * xgap));
-		SDL_RenderPoint(sdlren, (float)xpxl1, (float)ypxl1);
-		SDL_SetRenderDrawColor(
-		    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (yend - floorf(yend)) * xgap));
-		SDL_RenderPoint(sdlren, (float)xpxl1, (float)(ypxl1 + 1));
+		sdl_draw_colored_point(r, g, b, (int)((float)alpha * (1.0f - (yend - floorf(yend))) * xgap), (float)xpxl1,
+		    (float)ypxl1);
+		sdl_draw_colored_point(
+		    r, g, b, (int)((float)alpha * (yend - floorf(yend)) * xgap), (float)xpxl1, (float)(ypxl1 + 1));
 	}
 
 	float intery = yend + gradient;
@@ -2561,37 +2691,29 @@ void sdl_line_aa(int x0, int y0, int x1, int y1, unsigned short color, unsigned 
 	int ypxl2 = (int)floorf(yend);
 
 	if (steep) {
-		SDL_SetRenderDrawColor(
-		    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (1.0f - (yend - floorf(yend))) * xgap));
-		SDL_RenderPoint(sdlren, (float)ypxl2, (float)xpxl2);
-		SDL_SetRenderDrawColor(
-		    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (yend - floorf(yend)) * xgap));
-		SDL_RenderPoint(sdlren, (float)(ypxl2 + 1), (float)xpxl2);
+		sdl_draw_colored_point(r, g, b, (int)((float)alpha * (1.0f - (yend - floorf(yend))) * xgap), (float)ypxl2,
+		    (float)xpxl2);
+		sdl_draw_colored_point(
+		    r, g, b, (int)((float)alpha * (yend - floorf(yend)) * xgap), (float)(ypxl2 + 1), (float)xpxl2);
 	} else {
-		SDL_SetRenderDrawColor(
-		    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (1.0f - (yend - floorf(yend))) * xgap));
-		SDL_RenderPoint(sdlren, (float)xpxl2, (float)ypxl2);
-		SDL_SetRenderDrawColor(
-		    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (yend - floorf(yend)) * xgap));
-		SDL_RenderPoint(sdlren, (float)xpxl2, (float)(ypxl2 + 1));
+		sdl_draw_colored_point(r, g, b, (int)((float)alpha * (1.0f - (yend - floorf(yend))) * xgap), (float)xpxl2,
+		    (float)ypxl2);
+		sdl_draw_colored_point(
+		    r, g, b, (int)((float)alpha * (yend - floorf(yend)) * xgap), (float)xpxl2, (float)(ypxl2 + 1));
 	}
 
 	// Main loop
 	for (int x = xpxl1 + 1; x < xpxl2; x++) {
 		if (steep) {
-			SDL_SetRenderDrawColor(
-			    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (1.0f - (intery - floorf(intery)))));
-			SDL_RenderPoint(sdlren, floorf(intery), (float)x);
-			SDL_SetRenderDrawColor(
-			    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (intery - floorf(intery))));
-			SDL_RenderPoint(sdlren, floorf(intery) + 1, (float)x);
+			sdl_draw_colored_point(
+			    r, g, b, (int)((float)alpha * (1.0f - (intery - floorf(intery)))), floorf(intery), (float)x);
+			sdl_draw_colored_point(
+			    r, g, b, (int)((float)alpha * (intery - floorf(intery))), floorf(intery) + 1, (float)x);
 		} else {
-			SDL_SetRenderDrawColor(
-			    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (1.0f - (intery - floorf(intery)))));
-			SDL_RenderPoint(sdlren, (float)x, floorf(intery));
-			SDL_SetRenderDrawColor(
-			    sdlren, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)((float)alpha * (intery - floorf(intery))));
-			SDL_RenderPoint(sdlren, (float)x, floorf(intery) + 1);
+			sdl_draw_colored_point(
+			    r, g, b, (int)((float)alpha * (1.0f - (intery - floorf(intery)))), (float)x, floorf(intery));
+			sdl_draw_colored_point(
+			    r, g, b, (int)((float)alpha * (intery - floorf(intery))), (float)x, floorf(intery) + 1);
 		}
 		intery += gradient;
 	}

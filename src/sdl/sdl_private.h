@@ -156,6 +156,15 @@ typedef struct sdl_backend_rect {
 	float h;
 } SdlBackendRect;
 
+typedef SDL_FPoint SdlBackendPoint;
+
+typedef struct sdl_backend_line {
+	float x0;
+	float y0;
+	float x1;
+	float y1;
+} SdlBackendLine;
+
 static inline int sdl_backend_argb8888_pitch_is_valid(int width, size_t pitch_bytes)
 {
 	return width > 0 && pitch_bytes >= (size_t)width * sizeof(uint32_t);
@@ -167,6 +176,11 @@ void sdl_backend_destroy_texture(SDL_Texture *texture);
 int sdl_backend_get_texture_size(SDL_Texture *texture, float *width, float *height);
 int sdl_backend_set_texture_alpha(SDL_Texture *texture, uint8_t alpha);
 int sdl_backend_blit_texture(SDL_Texture *texture, const SdlBackendRect *src, const SdlBackendRect *dst);
+int sdl_backend_fill_rect(const SdlBackendRect *rect, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+int sdl_backend_draw_points(const SdlBackendPoint *points, size_t count, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+int sdl_backend_draw_lines(const SdlBackendLine *lines, size_t count, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+int sdl_backend_set_blend_mode(int mode);
+int sdl_backend_get_blend_mode(void);
 #endif
 
 // ============================================================================

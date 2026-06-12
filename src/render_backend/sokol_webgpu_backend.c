@@ -9,6 +9,7 @@
 #include "render_backend/sokol_webgpu_backend.h"
 
 #include <stdbool.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,9 +27,14 @@ typedef struct sokol_webgpu_state {
 	AstoniaRendererBlendMode blend_mode;
 	sg_environment environment;
 	sg_shader sprite_shader;
-	sg_pipeline sprite_pipeline;
+	sg_pipeline sprite_pipelines[5];
 	sg_sampler sprite_sampler;
 	sg_buffer sprite_vertex_buffer;
+	sg_shader solid_shader;
+	sg_pipeline solid_point_pipelines[5];
+	sg_pipeline solid_line_pipelines[5];
+	sg_pipeline solid_triangle_pipelines[5];
+	sg_buffer solid_vertex_buffer;
 } SokolWebgpuState;
 
 typedef struct sokol_texture_slot {
@@ -51,15 +57,26 @@ typedef struct sprite_vertex {
 	uint8_t a;
 } SpriteVertex;
 
-typedef struct sprite_vs_params {
+typedef struct primitive_vertex {
+	float x;
+	float y;
+	uint8_t r;
+	uint8_t g;
+	uint8_t b;
+	uint8_t a;
+} PrimitiveVertex;
+
+typedef struct screen_vs_params {
 	float screen_size[2];
 	float pad[2];
-} SpriteVsParams;
+} ScreenVsParams;
 
 static SokolWebgpuState g_sokol_webgpu;
 
 #define SOKOL_MAX_TEXTURES          16384
 #define SOKOL_SPRITE_VERTEX_BYTES   (4 * 1024 * 1024)
+#define SOKOL_SOLID_VERTEX_BYTES    (4 * 1024 * 1024)
+#define SOKOL_BLEND_MODE_COUNT       5
 #define SOKOL_SPRITE_VERTEX_COUNT   6
 #define SOKOL_SPRITE_TRIANGLE_COUNT 6
 
@@ -95,6 +112,32 @@ static const char g_sprite_shader_wgsl[] =
     "@group(1) @binding(1) var sprite_smp: sampler;\n"
     "@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {\n"
     "  return textureSample(sprite_tex, sprite_smp, in.uv) * in.color;\n"
+    "}\n";
+
+static const char g_solid_shader_wgsl[] =
+    "struct VsParams {\n"
+    "  screen_size: vec2<f32>,\n"
+    "  pad: vec2<f32>,\n"
+    "};\n"
+    "@group(0) @binding(0) var<uniform> vs_params: VsParams;\n"
+    "struct VertexInput {\n"
+    "  @location(0) pos: vec2<f32>,\n"
+    "  @location(1) color: vec4<f32>,\n"
+    "};\n"
+    "struct VertexOutput {\n"
+    "  @builtin(position) position: vec4<f32>,\n"
+    "  @location(0) color: vec4<f32>,\n"
+    "};\n"
+    "@vertex fn vs_main(in: VertexInput) -> VertexOutput {\n"
+    "  var out: VertexOutput;\n"
+    "  let clip_x = (in.pos.x / vs_params.screen_size.x) * 2.0 - 1.0;\n"
+    "  let clip_y = 1.0 - (in.pos.y / vs_params.screen_size.y) * 2.0;\n"
+    "  out.position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);\n"
+    "  out.color = in.color;\n"
+    "  return out;\n"
+    "}\n"
+    "@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {\n"
+    "  return in.color;\n"
     "}\n";
 
 static SokolTextureSlot *find_texture_slot(AstoniaRendererTexture texture)
@@ -195,6 +238,56 @@ static int update_texture_full(
 	return 1;
 }
 
+static bool blend_mode_is_valid(AstoniaRendererBlendMode mode)
+{
+	return mode >= ASTONIA_RENDERER_BLEND_NORMAL && mode <= ASTONIA_RENDERER_BLEND_NONE;
+}
+
+static int blend_mode_index(AstoniaRendererBlendMode mode)
+{
+	return blend_mode_is_valid(mode) ? (int)mode : (int)ASTONIA_RENDERER_BLEND_NORMAL;
+}
+
+static void configure_pipeline_blend(sg_pipeline_desc *pipeline_desc, AstoniaRendererBlendMode mode)
+{
+	sg_blend_state *blend = &pipeline_desc->colors[0].blend;
+
+	switch (mode) {
+	case ASTONIA_RENDERER_BLEND_NONE:
+		blend->enabled = false;
+		break;
+	case ASTONIA_RENDERER_BLEND_ADDITIVE:
+		blend->enabled = true;
+		blend->src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA;
+		blend->dst_factor_rgb = SG_BLENDFACTOR_ONE;
+		blend->src_factor_alpha = SG_BLENDFACTOR_ONE;
+		blend->dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+		break;
+	case ASTONIA_RENDERER_BLEND_MOD:
+		blend->enabled = true;
+		blend->src_factor_rgb = SG_BLENDFACTOR_ZERO;
+		blend->dst_factor_rgb = SG_BLENDFACTOR_SRC_COLOR;
+		blend->src_factor_alpha = SG_BLENDFACTOR_ZERO;
+		blend->dst_factor_alpha = SG_BLENDFACTOR_ONE;
+		break;
+	case ASTONIA_RENDERER_BLEND_MUL:
+		blend->enabled = true;
+		blend->src_factor_rgb = SG_BLENDFACTOR_DST_COLOR;
+		blend->dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+		blend->src_factor_alpha = SG_BLENDFACTOR_ONE;
+		blend->dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+		break;
+	case ASTONIA_RENDERER_BLEND_NORMAL:
+	default:
+		blend->enabled = true;
+		blend->src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA;
+		blend->dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+		blend->src_factor_alpha = SG_BLENDFACTOR_ONE;
+		blend->dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+		break;
+	}
+}
+
 static int create_sprite_pipeline(void)
 {
 	sg_shader_desc shader_desc = {0};
@@ -210,7 +303,7 @@ static int create_sprite_pipeline(void)
 	shader_desc.attrs[1].base_type = SG_SHADERATTRBASETYPE_FLOAT;
 	shader_desc.attrs[2].base_type = SG_SHADERATTRBASETYPE_FLOAT;
 	shader_desc.uniform_blocks[0].stage = SG_SHADERSTAGE_VERTEX;
-	shader_desc.uniform_blocks[0].size = sizeof(SpriteVsParams);
+	shader_desc.uniform_blocks[0].size = sizeof(ScreenVsParams);
 	shader_desc.uniform_blocks[0].wgsl_group0_binding_n = 0u;
 	shader_desc.views[0].texture.stage = SG_SHADERSTAGE_FRAGMENT;
 	shader_desc.views[0].texture.image_type = SG_IMAGETYPE_2D;
@@ -238,17 +331,16 @@ static int create_sprite_pipeline(void)
 	pipeline_desc.layout.attrs[2].format = SG_VERTEXFORMAT_UBYTE4N;
 	pipeline_desc.layout.attrs[2].offset = offsetof(SpriteVertex, r);
 	pipeline_desc.colors[0].pixel_format = g_sokol_webgpu.environment.defaults.color_format;
-	pipeline_desc.colors[0].blend.enabled = true;
-	pipeline_desc.colors[0].blend.src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA;
-	pipeline_desc.colors[0].blend.dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
-	pipeline_desc.colors[0].blend.src_factor_alpha = SG_BLENDFACTOR_ONE;
-	pipeline_desc.colors[0].blend.dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+	pipeline_desc.primitive_type = SG_PRIMITIVETYPE_TRIANGLES;
 	pipeline_desc.sample_count = g_sokol_webgpu.environment.defaults.sample_count;
 	pipeline_desc.label = "astonia-sprite-pipeline";
 
-	g_sokol_webgpu.sprite_pipeline = sg_make_pipeline(&pipeline_desc);
-	if (sg_query_pipeline_state(g_sokol_webgpu.sprite_pipeline) != SG_RESOURCESTATE_VALID) {
-		return 0;
+	for (int mode = 0; mode < SOKOL_BLEND_MODE_COUNT; mode++) {
+		configure_pipeline_blend(&pipeline_desc, (AstoniaRendererBlendMode)mode);
+		g_sokol_webgpu.sprite_pipelines[mode] = sg_make_pipeline(&pipeline_desc);
+		if (sg_query_pipeline_state(g_sokol_webgpu.sprite_pipelines[mode]) != SG_RESOURCESTATE_VALID) {
+			return 0;
+		}
 	}
 
 	buffer_desc.size = SOKOL_SPRITE_VERTEX_BYTES;
@@ -268,6 +360,72 @@ static int create_sprite_pipeline(void)
 	sampler_desc.label = "astonia-sprite-sampler";
 	g_sokol_webgpu.sprite_sampler = sg_make_sampler(&sampler_desc);
 	if (sg_query_sampler_state(g_sokol_webgpu.sprite_sampler) != SG_RESOURCESTATE_VALID) {
+		return 0;
+	}
+
+	return 1;
+}
+
+static int create_solid_pipelines(void)
+{
+	sg_shader_desc shader_desc = {0};
+	sg_pipeline_desc pipeline_desc = {0};
+	sg_buffer_desc buffer_desc = {0};
+
+	shader_desc.vertex_func.source = g_solid_shader_wgsl;
+	shader_desc.vertex_func.entry = "vs_main";
+	shader_desc.fragment_func.source = g_solid_shader_wgsl;
+	shader_desc.fragment_func.entry = "fs_main";
+	shader_desc.attrs[0].base_type = SG_SHADERATTRBASETYPE_FLOAT;
+	shader_desc.attrs[1].base_type = SG_SHADERATTRBASETYPE_FLOAT;
+	shader_desc.uniform_blocks[0].stage = SG_SHADERSTAGE_VERTEX;
+	shader_desc.uniform_blocks[0].size = sizeof(ScreenVsParams);
+	shader_desc.uniform_blocks[0].wgsl_group0_binding_n = 0u;
+	shader_desc.label = "astonia-solid-shader";
+
+	g_sokol_webgpu.solid_shader = sg_make_shader(&shader_desc);
+	if (sg_query_shader_state(g_sokol_webgpu.solid_shader) != SG_RESOURCESTATE_VALID) {
+		return 0;
+	}
+
+	pipeline_desc.shader = g_sokol_webgpu.solid_shader;
+	pipeline_desc.layout.buffers[0].stride = sizeof(PrimitiveVertex);
+	pipeline_desc.layout.attrs[0].format = SG_VERTEXFORMAT_FLOAT2;
+	pipeline_desc.layout.attrs[0].offset = offsetof(PrimitiveVertex, x);
+	pipeline_desc.layout.attrs[1].format = SG_VERTEXFORMAT_UBYTE4N;
+	pipeline_desc.layout.attrs[1].offset = offsetof(PrimitiveVertex, r);
+	pipeline_desc.colors[0].pixel_format = g_sokol_webgpu.environment.defaults.color_format;
+	pipeline_desc.sample_count = g_sokol_webgpu.environment.defaults.sample_count;
+	pipeline_desc.label = "astonia-solid-pipeline";
+
+	for (int mode = 0; mode < SOKOL_BLEND_MODE_COUNT; mode++) {
+		configure_pipeline_blend(&pipeline_desc, (AstoniaRendererBlendMode)mode);
+
+		pipeline_desc.primitive_type = SG_PRIMITIVETYPE_POINTS;
+		g_sokol_webgpu.solid_point_pipelines[mode] = sg_make_pipeline(&pipeline_desc);
+		if (sg_query_pipeline_state(g_sokol_webgpu.solid_point_pipelines[mode]) != SG_RESOURCESTATE_VALID) {
+			return 0;
+		}
+
+		pipeline_desc.primitive_type = SG_PRIMITIVETYPE_LINES;
+		g_sokol_webgpu.solid_line_pipelines[mode] = sg_make_pipeline(&pipeline_desc);
+		if (sg_query_pipeline_state(g_sokol_webgpu.solid_line_pipelines[mode]) != SG_RESOURCESTATE_VALID) {
+			return 0;
+		}
+
+		pipeline_desc.primitive_type = SG_PRIMITIVETYPE_TRIANGLES;
+		g_sokol_webgpu.solid_triangle_pipelines[mode] = sg_make_pipeline(&pipeline_desc);
+		if (sg_query_pipeline_state(g_sokol_webgpu.solid_triangle_pipelines[mode]) != SG_RESOURCESTATE_VALID) {
+			return 0;
+		}
+	}
+
+	buffer_desc.size = SOKOL_SOLID_VERTEX_BYTES;
+	buffer_desc.usage.vertex_buffer = true;
+	buffer_desc.usage.stream_update = true;
+	buffer_desc.label = "astonia-solid-vertex-stream";
+	g_sokol_webgpu.solid_vertex_buffer = sg_make_buffer(&buffer_desc);
+	if (sg_query_buffer_state(g_sokol_webgpu.solid_vertex_buffer) != SG_RESOURCESTATE_VALID) {
 		return 0;
 	}
 
@@ -298,7 +456,7 @@ static int sokol_webgpu_init(int width, int height, const char *title, int monit
 	g_sokol_webgpu.blend_mode = ASTONIA_RENDERER_BLEND_NORMAL;
 	memset(g_texture_slots, 0, sizeof(g_texture_slots));
 	g_next_texture_id = 1u;
-	if (!create_sprite_pipeline()) {
+	if (!create_sprite_pipeline() || !create_solid_pipelines()) {
 		sg_shutdown();
 		memset(&g_sokol_webgpu, 0, sizeof(g_sokol_webgpu));
 		return 0;
@@ -321,11 +479,28 @@ static void sokol_webgpu_shutdown(void)
 		if (g_sokol_webgpu.sprite_vertex_buffer.id) {
 			sg_destroy_buffer(g_sokol_webgpu.sprite_vertex_buffer);
 		}
-		if (g_sokol_webgpu.sprite_pipeline.id) {
-			sg_destroy_pipeline(g_sokol_webgpu.sprite_pipeline);
+		if (g_sokol_webgpu.solid_vertex_buffer.id) {
+			sg_destroy_buffer(g_sokol_webgpu.solid_vertex_buffer);
+		}
+		for (int i = 0; i < SOKOL_BLEND_MODE_COUNT; i++) {
+			if (g_sokol_webgpu.sprite_pipelines[i].id) {
+				sg_destroy_pipeline(g_sokol_webgpu.sprite_pipelines[i]);
+			}
+			if (g_sokol_webgpu.solid_point_pipelines[i].id) {
+				sg_destroy_pipeline(g_sokol_webgpu.solid_point_pipelines[i]);
+			}
+			if (g_sokol_webgpu.solid_line_pipelines[i].id) {
+				sg_destroy_pipeline(g_sokol_webgpu.solid_line_pipelines[i]);
+			}
+			if (g_sokol_webgpu.solid_triangle_pipelines[i].id) {
+				sg_destroy_pipeline(g_sokol_webgpu.solid_triangle_pipelines[i]);
+			}
 		}
 		if (g_sokol_webgpu.sprite_shader.id) {
 			sg_destroy_shader(g_sokol_webgpu.sprite_shader);
+		}
+		if (g_sokol_webgpu.solid_shader.id) {
+			sg_destroy_shader(g_sokol_webgpu.solid_shader);
 		}
 		sg_shutdown();
 	}
@@ -470,11 +645,13 @@ static int sokol_webgpu_draw_textured_quad(
 {
 	SokolTextureSlot *slot;
 	SpriteVertex sprite_vertices[SOKOL_SPRITE_VERTEX_COUNT];
-	SpriteVsParams params;
+	ScreenVsParams params;
 	sg_bindings bindings = {0};
+	sg_pipeline pipeline;
 	int vertex_offset;
 
-	if (!g_sokol_webgpu.initialized || !vertices || !g_sokol_webgpu.sprite_pipeline.id ||
+	pipeline = g_sokol_webgpu.sprite_pipelines[blend_mode_index(g_sokol_webgpu.blend_mode)];
+	if (!g_sokol_webgpu.initialized || !vertices || !pipeline.id ||
 	    !g_sokol_webgpu.sprite_vertex_buffer.id || !g_sokol_webgpu.sprite_sampler.id || g_sokol_webgpu.width <= 0 ||
 	    g_sokol_webgpu.height <= 0) {
 		return 0;
@@ -505,7 +682,7 @@ static int sokol_webgpu_draw_textured_quad(
 		return 0;
 	}
 
-	params = (SpriteVsParams){
+	params = (ScreenVsParams){
 		.screen_size = {(float)g_sokol_webgpu.width, (float)g_sokol_webgpu.height},
 		.pad = {0.0f, 0.0f},
 	};
@@ -515,7 +692,7 @@ static int sokol_webgpu_draw_textured_quad(
 	bindings.views[0] = slot->view;
 	bindings.samplers[0] = g_sokol_webgpu.sprite_sampler;
 
-	sg_apply_pipeline(g_sokol_webgpu.sprite_pipeline);
+	sg_apply_pipeline(pipeline);
 	sg_apply_uniforms(0, SG_RANGE_REF(params));
 	sg_apply_bindings(&bindings);
 	sg_draw(0, SOKOL_SPRITE_TRIANGLE_COUNT, 1);
@@ -523,58 +700,192 @@ static int sokol_webgpu_draw_textured_quad(
 	return 1;
 }
 
+static PrimitiveVertex primitive_vertex(float x, float y, AstoniaRendererColor color)
+{
+	return (PrimitiveVertex){
+		.x = x,
+		.y = y,
+		.r = color.r,
+		.g = color.g,
+		.b = color.b,
+		.a = color.a,
+	};
+}
+
+static int sokol_webgpu_draw_primitive_vertices(sg_pipeline pipeline, const PrimitiveVertex *vertices, size_t vertex_count)
+{
+	ScreenVsParams params;
+	sg_bindings bindings = {0};
+	sg_range vertex_range;
+	int vertex_offset;
+
+	if (!g_sokol_webgpu.initialized || !pipeline.id || !g_sokol_webgpu.solid_vertex_buffer.id || !vertices ||
+	    vertex_count == 0u || vertex_count > (size_t)INT_MAX || g_sokol_webgpu.width <= 0 ||
+	    g_sokol_webgpu.height <= 0) {
+		return 0;
+	}
+
+	vertex_range = (sg_range){
+		.ptr = vertices,
+		.size = vertex_count * sizeof(vertices[0]),
+	};
+	vertex_offset = sg_append_buffer(g_sokol_webgpu.solid_vertex_buffer, &vertex_range);
+	if (sg_query_buffer_overflow(g_sokol_webgpu.solid_vertex_buffer)) {
+		return 0;
+	}
+
+	params = (ScreenVsParams){
+		.screen_size = {(float)g_sokol_webgpu.width, (float)g_sokol_webgpu.height},
+		.pad = {0.0f, 0.0f},
+	};
+
+	bindings.vertex_buffers[0] = g_sokol_webgpu.solid_vertex_buffer;
+	bindings.vertex_buffer_offsets[0] = vertex_offset;
+
+	sg_apply_pipeline(pipeline);
+	sg_apply_uniforms(0, SG_RANGE_REF(params));
+	sg_apply_bindings(&bindings);
+	sg_draw(0, (int)vertex_count, 1);
+
+	return 1;
+}
+
 static int sokol_webgpu_fill_rect(const AstoniaRendererRect *rect, AstoniaRendererColor color)
 {
-	(void)rect;
-	(void)color;
+	PrimitiveVertex vertices[6];
+	sg_pipeline pipeline = g_sokol_webgpu.solid_triangle_pipelines[blend_mode_index(g_sokol_webgpu.blend_mode)];
+	float x0, y0, x1, y1;
 
-	return 0;
+	if (!rect || rect->w <= 0.0f || rect->h <= 0.0f) {
+		return 0;
+	}
+
+	x0 = rect->x;
+	y0 = rect->y;
+	x1 = rect->x + rect->w;
+	y1 = rect->y + rect->h;
+
+	vertices[0] = primitive_vertex(x0, y0, color);
+	vertices[1] = primitive_vertex(x1, y0, color);
+	vertices[2] = primitive_vertex(x1, y1, color);
+	vertices[3] = vertices[0];
+	vertices[4] = vertices[2];
+	vertices[5] = primitive_vertex(x0, y1, color);
+
+	return sokol_webgpu_draw_primitive_vertices(pipeline, vertices, 6u);
 }
 
 static int sokol_webgpu_draw_lines(
     const AstoniaRendererLine *lines, size_t count, AstoniaRendererColor color)
 {
-	(void)lines;
-	(void)count;
-	(void)color;
+	enum { STACK_VERTEX_COUNT = 64 };
+	PrimitiveVertex stack_vertices[STACK_VERTEX_COUNT];
+	PrimitiveVertex *vertices = stack_vertices;
+	sg_pipeline pipeline = g_sokol_webgpu.solid_line_pipelines[blend_mode_index(g_sokol_webgpu.blend_mode)];
+	size_t vertex_count;
+	int result;
 
-	return 0;
+	if (!lines || count == 0u || count > (size_t)INT_MAX / 2u) {
+		return 0;
+	}
+
+	vertex_count = count * 2u;
+	if (vertex_count > STACK_VERTEX_COUNT) {
+		vertices = malloc(vertex_count * sizeof(*vertices));
+		if (!vertices) {
+			return 0;
+		}
+	}
+
+	for (size_t i = 0; i < count; i++) {
+		vertices[i * 2u + 0u] = primitive_vertex(lines[i].x0, lines[i].y0, color);
+		vertices[i * 2u + 1u] = primitive_vertex(lines[i].x1, lines[i].y1, color);
+	}
+
+	result = sokol_webgpu_draw_primitive_vertices(pipeline, vertices, vertex_count);
+	if (vertices != stack_vertices) {
+		free(vertices);
+	}
+	return result;
 }
 
 static int sokol_webgpu_draw_points(
     const AstoniaRendererPoint *points, size_t count, AstoniaRendererColor color)
 {
-	(void)points;
-	(void)count;
-	(void)color;
+	enum { STACK_VERTEX_COUNT = 128 };
+	PrimitiveVertex stack_vertices[STACK_VERTEX_COUNT];
+	PrimitiveVertex *vertices = stack_vertices;
+	sg_pipeline pipeline = g_sokol_webgpu.solid_point_pipelines[blend_mode_index(g_sokol_webgpu.blend_mode)];
+	int result;
 
-	return 0;
+	if (!points || count == 0u || count > (size_t)INT_MAX) {
+		return 0;
+	}
+
+	if (count > STACK_VERTEX_COUNT) {
+		vertices = malloc(count * sizeof(*vertices));
+		if (!vertices) {
+			return 0;
+		}
+	}
+
+	for (size_t i = 0; i < count; i++) {
+		vertices[i] = primitive_vertex(points[i].x, points[i].y, color);
+	}
+
+	result = sokol_webgpu_draw_primitive_vertices(pipeline, vertices, count);
+	if (vertices != stack_vertices) {
+		free(vertices);
+	}
+	return result;
 }
 
 static int sokol_webgpu_draw_solid_triangles(const AstoniaRendererSolidVertex *vertices, size_t vertex_count,
     const uint16_t *indices, size_t index_count)
 {
-	(void)vertices;
-	(void)vertex_count;
-	(void)indices;
-	(void)index_count;
+	enum { STACK_VERTEX_COUNT = 96 };
+	PrimitiveVertex stack_vertices[STACK_VERTEX_COUNT];
+	PrimitiveVertex *expanded_vertices = stack_vertices;
+	sg_pipeline pipeline = g_sokol_webgpu.solid_triangle_pipelines[blend_mode_index(g_sokol_webgpu.blend_mode)];
+	int result;
 
-	return 0;
+	if (!vertices || !indices || vertex_count == 0u || index_count == 0u || index_count > (size_t)INT_MAX ||
+	    index_count % 3u != 0u) {
+		return 0;
+	}
+
+	if (index_count > STACK_VERTEX_COUNT) {
+		expanded_vertices = malloc(index_count * sizeof(*expanded_vertices));
+		if (!expanded_vertices) {
+			return 0;
+		}
+	}
+
+	for (size_t i = 0; i < index_count; i++) {
+		if ((size_t)indices[i] >= vertex_count) {
+			if (expanded_vertices != stack_vertices) {
+				free(expanded_vertices);
+			}
+			return 0;
+		}
+		expanded_vertices[i] = primitive_vertex(vertices[indices[i]].x, vertices[indices[i]].y, vertices[indices[i]].color);
+	}
+
+	result = sokol_webgpu_draw_primitive_vertices(pipeline, expanded_vertices, index_count);
+	if (expanded_vertices != stack_vertices) {
+		free(expanded_vertices);
+	}
+	return result;
 }
 
 static int sokol_webgpu_set_blend_mode(AstoniaRendererBlendMode mode)
 {
-	switch (mode) {
-	case ASTONIA_RENDERER_BLEND_NORMAL:
-	case ASTONIA_RENDERER_BLEND_ADDITIVE:
-	case ASTONIA_RENDERER_BLEND_MOD:
-	case ASTONIA_RENDERER_BLEND_MUL:
-	case ASTONIA_RENDERER_BLEND_NONE:
-		g_sokol_webgpu.blend_mode = mode;
-		return 1;
-	default:
+	if (!blend_mode_is_valid(mode)) {
 		return 0;
 	}
+
+	g_sokol_webgpu.blend_mode = mode;
+	return 1;
 }
 
 static AstoniaRendererBlendMode sokol_webgpu_get_blend_mode(void)

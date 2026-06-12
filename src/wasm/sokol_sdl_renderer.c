@@ -229,3 +229,134 @@ int sdl_backend_blit_texture(SDL_Texture *raw_texture, const SdlBackendRect *src
 
 	return g_renderer->draw_textured_quad(texture->texture, vertices);
 }
+
+static AstoniaRendererColor sdl_backend_color(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+	return (AstoniaRendererColor){
+		.r = r,
+		.g = g,
+		.b = b,
+		.a = a,
+	};
+}
+
+int sdl_backend_fill_rect(const SdlBackendRect *rect, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+	AstoniaRendererRect backend_rect;
+
+	if (!g_renderer || !g_renderer->fill_rect || !rect) {
+		return 0;
+	}
+
+	backend_rect = (AstoniaRendererRect){
+		.x = rect->x,
+		.y = rect->y,
+		.w = rect->w,
+		.h = rect->h,
+	};
+	return g_renderer->fill_rect(&backend_rect, sdl_backend_color(r, g, b, a));
+}
+
+int sdl_backend_draw_points(
+    const SdlBackendPoint *points, size_t count, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+	AstoniaRendererPoint *backend_points;
+	int result;
+
+	if (!g_renderer || !g_renderer->draw_points || !points || count == 0u) {
+		return 0;
+	}
+
+	backend_points = malloc(count * sizeof(*backend_points));
+	if (!backend_points) {
+		return 0;
+	}
+
+	for (size_t i = 0; i < count; i++) {
+		backend_points[i] = (AstoniaRendererPoint){
+			.x = points[i].x,
+			.y = points[i].y,
+		};
+	}
+
+	result = g_renderer->draw_points(backend_points, count, sdl_backend_color(r, g, b, a));
+	free(backend_points);
+	return result;
+}
+
+int sdl_backend_draw_lines(const SdlBackendLine *lines, size_t count, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+	AstoniaRendererLine *backend_lines;
+	int result;
+
+	if (!g_renderer || !g_renderer->draw_lines || !lines || count == 0u) {
+		return 0;
+	}
+
+	backend_lines = malloc(count * sizeof(*backend_lines));
+	if (!backend_lines) {
+		return 0;
+	}
+
+	for (size_t i = 0; i < count; i++) {
+		backend_lines[i] = (AstoniaRendererLine){
+			.x0 = lines[i].x0,
+			.y0 = lines[i].y0,
+			.x1 = lines[i].x1,
+			.y1 = lines[i].y1,
+		};
+	}
+
+	result = g_renderer->draw_lines(backend_lines, count, sdl_backend_color(r, g, b, a));
+	free(backend_lines);
+	return result;
+}
+
+static AstoniaRendererBlendMode sdl_backend_blend_mode_from_int(int mode)
+{
+	switch (mode) {
+	case 0:
+		return ASTONIA_RENDERER_BLEND_NORMAL;
+	case 1:
+		return ASTONIA_RENDERER_BLEND_ADDITIVE;
+	case 2:
+		return ASTONIA_RENDERER_BLEND_MOD;
+	case 3:
+		return ASTONIA_RENDERER_BLEND_MUL;
+	case 4:
+		return ASTONIA_RENDERER_BLEND_NONE;
+	default:
+		return ASTONIA_RENDERER_BLEND_NORMAL;
+	}
+}
+
+int sdl_backend_set_blend_mode(int mode)
+{
+	if (!g_renderer || !g_renderer->set_blend_mode) {
+		return 0;
+	}
+
+	return g_renderer->set_blend_mode(sdl_backend_blend_mode_from_int(mode));
+}
+
+int sdl_backend_get_blend_mode(void)
+{
+	if (!g_renderer || !g_renderer->get_blend_mode) {
+		return 0;
+	}
+
+	switch (g_renderer->get_blend_mode()) {
+	case ASTONIA_RENDERER_BLEND_NORMAL:
+		return 0;
+	case ASTONIA_RENDERER_BLEND_ADDITIVE:
+		return 1;
+	case ASTONIA_RENDERER_BLEND_MOD:
+		return 2;
+	case ASTONIA_RENDERER_BLEND_MUL:
+		return 3;
+	case ASTONIA_RENDERER_BLEND_NONE:
+		return 4;
+	default:
+		return 0;
+	}
+}

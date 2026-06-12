@@ -173,6 +173,49 @@ int sdl_backend_blit_texture(SDL_Texture *raw_texture, const SdlBackendRect *src
 	return 1;
 }
 
+int sdl_backend_fill_rect(const SdlBackendRect *rect, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+	(void)rect;
+	(void)r;
+	(void)g;
+	(void)b;
+	(void)a;
+	return 1;
+}
+
+int sdl_backend_draw_points(const SdlBackendPoint *points, size_t count, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+	(void)points;
+	(void)count;
+	(void)r;
+	(void)g;
+	(void)b;
+	(void)a;
+	return 1;
+}
+
+int sdl_backend_draw_lines(const SdlBackendLine *lines, size_t count, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+	(void)lines;
+	(void)count;
+	(void)r;
+	(void)g;
+	(void)b;
+	(void)a;
+	return 1;
+}
+
+int sdl_backend_set_blend_mode(int mode)
+{
+	(void)mode;
+	return 1;
+}
+
+int sdl_backend_get_blend_mode(void)
+{
+	return 0;
+}
+
 static int test_cached_text_uses_backend_texture_once(void)
 {
 	int end_x;
