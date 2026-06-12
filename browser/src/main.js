@@ -1,6 +1,7 @@
 import { loadSpriteAssets } from './assets/sprite-assets.js';
 import { AstoniaLiveSession } from './live-session.js';
 import { renderAstoniaRenderListToCanvas } from './render/canvas-renderer.js';
+import { hitTestAstoniaRenderListTile } from './render/tile-hit-test.js';
 
 const statusCard = document.querySelector('[data-testid="webgpu-status"]');
 const statusTitle = document.querySelector('[data-webgpu-title]');
@@ -19,6 +20,9 @@ const playerPosition = document.querySelector('[data-testid="live-player-positio
 const worldSummary = document.querySelector('[data-testid="live-world-summary"]');
 const commandCounts = document.querySelector('[data-testid="live-command-counts"]');
 const byteCounts = document.querySelector('[data-testid="live-byte-counts"]');
+const lastMoveCommand = document.querySelector('[data-testid="live-last-move-command"]');
+const lastReceivedTick = document.querySelector('[data-testid="live-last-received-tick"]');
+const lastVisibleUpdate = document.querySelector('[data-testid="live-last-visible-update"]');
 const messageLog = document.querySelector('[data-testid="live-message-log"]');
 
 const liveSession = new AstoniaLiveSession();
@@ -88,6 +92,17 @@ liveForm.addEventListener('submit', (event) => {
   });
 });
 
+worldCanvas.addEventListener('click', (event) => {
+  const renderList = liveSession.state.renderList;
+  const target = hitTestAstoniaRenderListTile(renderList, canvasPointFromEvent(event, worldCanvas));
+  if (!target) {
+    lastMoveCommand.textContent = 'No visible tile hit';
+    return;
+  }
+
+  liveSession.moveToTile(target.world);
+});
+
 hydrateFormFromUrl();
 
 if (new URLSearchParams(window.location.search).get('autoconnect') === '1') {
@@ -111,6 +126,9 @@ async function updateLiveView(state) {
     : '-';
   worldSummary.textContent = `${snapshot?.visibleWorld?.nonEmptyCells ?? 0} cells / ${snapshot?.visibleWorld?.characters?.length ?? 0} characters`;
   commandCounts.textContent = `modeled ${snapshot?.commands?.modeled?.total ?? 0} / skipped ${snapshot?.commands?.skipped?.total ?? 0}`;
+  lastMoveCommand.textContent = formatMoveCommand(state.lastMoveCommand);
+  lastReceivedTick.textContent = formatReceivedTick(state.lastReceivedTick);
+  lastVisibleUpdate.textContent = formatVisibleUpdate(state.lastVisibleUpdate);
   messageLog.replaceChildren(
     ...(snapshot?.textMessages ?? []).slice(-5).map((message) => {
       const row = document.createElement('p');
@@ -159,4 +177,42 @@ function statusLabel(status) {
 
 function formatValue(value) {
   return value === null || value === undefined ? '-' : String(value);
+}
+
+function canvasPointFromEvent(event, canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = rect.width > 0 ? canvas.width / rect.width : 1;
+  const scaleY = rect.height > 0 ? canvas.height / rect.height : 1;
+
+  return {
+    x: (event.clientX - rect.left) * scaleX,
+    y: (event.clientY - rect.top) * scaleY
+  };
+}
+
+function formatMoveCommand(command) {
+  if (!command) {
+    return '-';
+  }
+
+  const bytes = command.bytes.map((byte) => `0x${byte.toString(16).padStart(2, '0')}`).join(' ');
+  const suffix = command.reason ? ` (${command.reason})` : '';
+  return `${command.status} ${command.type} ${command.x},${command.y} [${bytes}] after ${command.sentAfterDecodedTicks} tick(s)${suffix}`;
+}
+
+function formatReceivedTick(tick) {
+  if (!tick) {
+    return '-';
+  }
+
+  return `decoded ${tick.decodedTicks}, current ${formatValue(tick.currentTick)}, raw ${tick.rawBytes} byte(s)`;
+}
+
+function formatVisibleUpdate(update) {
+  if (!update) {
+    return '-';
+  }
+
+  const position = update.playerPosition ? `${update.playerPosition.x},${update.playerPosition.y}` : '-';
+  return `${position} at current ${formatValue(update.currentTick)} after ${update.decodedTicks} tick(s)`;
 }

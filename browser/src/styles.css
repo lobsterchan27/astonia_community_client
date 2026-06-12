@@ -207,6 +207,7 @@ h2 {
 
 .world-frame canvas {
   display: block;
+  cursor: crosshair;
   max-width: none;
 }
 
@@ -253,7 +254,7 @@ h2 {
 
 .state-list div {
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
+  grid-template-columns: 72px minmax(0, 1fr);
   gap: 12px;
 }
 

@@ -2,6 +2,7 @@ import { createAstoniaRenderList } from './render/render-list.js';
 import { AstoniaProtocolStateReplay } from './protocol/state-replay.js';
 import { AstoniaTickStreamDecoder } from './protocol/tick-stream-decoder.js';
 import { buildAstoniaLoginFrames } from './protocol/login.js';
+import { encodeAstoniaMoveCommand } from './protocol/move-command.js';
 
 const DEFAULT_GATEWAY_URL = 'ws://127.0.0.1:8787';
 
@@ -107,6 +108,36 @@ export class AstoniaLiveSession extends EventTarget {
     this.#socket = null;
   }
 
+  moveToTile(target) {
+    const frame = encodeAstoniaMoveCommand(target);
+    const commandState = {
+      type: 'CL_MOVE',
+      x: target.x,
+      y: target.y,
+      bytes: Array.from(frame),
+      status: 'not-sent',
+      sentAfterDecodedTicks: this.#state.decodedTicks,
+      outboundFrame: this.#state.outboundFrames + 1,
+      reason: null
+    };
+
+    if (!this.#socket || this.#socket.readyState !== 1) {
+      commandState.reason = 'Gateway WebSocket is not open.';
+      this.#state.lastMoveCommand = commandState;
+      this.#emitChange();
+      return false;
+    }
+
+    this.#socket.send(frame);
+    this.#state.outboundFrames += 1;
+    this.#state.outboundBytes += frame.byteLength;
+    commandState.status = 'sent';
+    this.#state.lastMoveCommand = commandState;
+    this.#state.statusDetail = `Sent CL_MOVE to ${target.x},${target.y}; waiting for server-authoritative ticks.`;
+    this.#emitChange();
+    return true;
+  }
+
   async #receiveMessage(data, socket) {
     try {
       if (!this.#isCurrentSocket(socket)) {
@@ -141,6 +172,18 @@ export class AstoniaLiveSession extends EventTarget {
 
       this.#state.snapshot = replay.snapshot();
       this.#state.renderList = createAstoniaRenderList(this.#state.snapshot);
+      if (ticks.length > 0) {
+        this.#state.lastReceivedTick = {
+          decodedTicks: this.#state.decodedTicks,
+          currentTick: this.#state.snapshot.currentTick ?? null,
+          rawBytes: ticks.at(-1).rawLength
+        };
+        this.#state.lastVisibleUpdate = {
+          decodedTicks: this.#state.decodedTicks,
+          currentTick: this.#state.snapshot.currentTick ?? null,
+          playerPosition: clonePoint(this.#state.snapshot.player?.position)
+        };
+      }
       this.#state.status = this.#state.snapshot.login.done ? 'live' : 'receiving';
       this.#state.statusDetail =
         ticks.length > 0 ? `Decoded ${ticks.length} tick(s) from the latest gateway frame.` : 'Received gateway bytes; waiting for a full tick.';
@@ -181,7 +224,10 @@ function initialState() {
     decodedTicks: 0,
     lastRawTickBytes: 0,
     snapshot: null,
-    renderList: null
+    renderList: null,
+    lastMoveCommand: null,
+    lastReceivedTick: null,
+    lastVisibleUpdate: null
   };
 }
 
@@ -189,8 +235,19 @@ function cloneState(state) {
   return {
     ...state,
     snapshot: state.snapshot,
-    renderList: state.renderList
+    renderList: state.renderList,
+    lastMoveCommand: state.lastMoveCommand ? cloneDebugObject(state.lastMoveCommand) : null,
+    lastReceivedTick: state.lastReceivedTick ? cloneDebugObject(state.lastReceivedTick) : null,
+    lastVisibleUpdate: state.lastVisibleUpdate ? cloneDebugObject(state.lastVisibleUpdate) : null
   };
+}
+
+function cloneDebugObject(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function clonePoint(point) {
+  return point ? { ...point } : null;
 }
 
 async function webSocketDataToBytes(data) {
