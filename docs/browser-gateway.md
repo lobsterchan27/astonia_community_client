@@ -51,6 +51,11 @@ The gateway keeps the TCP host fixed to `--tcp-host`. `target-port` can only
 select a TCP port inside `--target-port-range`; requests outside that range are
 rejected during the WebSocket handshake.
 
+For the disposable server plus gateway fixture used by future WASM live smoke,
+see [WASM Live Fixture](wasm-live-fixture.md). That fixture uses the newer
+server repo at `/home/bfan/astonia_community_server3`, default TCP target
+`127.0.0.1:5556`, and target-port range `5556-5590`.
+
 ## WASM Client Transport
 
 The WASM client still calls the native `astonia_net_*` C ABI declared in
