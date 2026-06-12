@@ -108,6 +108,7 @@ module from `browser/dist/`.
 Check the local toolchain:
 
 ```bash
+scripts/setup-wasm-webgpu-env.sh
 make wasm-check-env
 ```
 

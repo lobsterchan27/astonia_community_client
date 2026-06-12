@@ -17,6 +17,12 @@ sdlt.txt
 .zig-cache
 .cache
 
+# Local toolchains and dependency caches
+.deps/
+browser/node_modules/
+browser/playwright-report/
+browser/test-results/
+
 # Quality check logs
 build/logs/
 

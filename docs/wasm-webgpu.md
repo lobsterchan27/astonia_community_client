@@ -52,6 +52,18 @@ The C client remains authoritative for protocol, simulation, input, and drawing.
 
 ## Commands
 
+Install the pinned Emscripten SDK into the ignored repo-local dependency
+directory:
+
+```bash
+scripts/setup-wasm-webgpu-env.sh
+```
+
+By default this installs `emsdk` tag `6.0.0` under `.deps/emsdk` and activates
+it with embedded config, avoiding user-global SDK state. Override the install
+path with `ASTONIA_EMSDK_ROOT=/path/to/emsdk` or the version with
+`EMSDK_VERSION=...` when needed.
+
 Check whether this host can build the target:
 
 ```bash
