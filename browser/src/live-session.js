@@ -114,6 +114,7 @@ export class AstoniaLiveSession extends EventTarget {
         return;
       }
 
+      this.#clearReplayTimer();
       if (this.#state.status !== 'error') {
         this.#state.status = this.#state.decodedTicks > 0 ? 'closed' : 'closed-before-ticks';
         this.#state.statusDetail = 'Gateway WebSocket closed.';
@@ -214,7 +215,7 @@ export class AstoniaLiveSession extends EventTarget {
 
     const replay = this.#replay;
     const tickBuffer = this.#tickBuffer;
-    if (!replay || !tickBuffer) {
+    if (!replay || !tickBuffer || !this.#socket || this.#socket.readyState !== 1) {
       return;
     }
 
