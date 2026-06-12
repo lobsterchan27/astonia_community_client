@@ -5,15 +5,15 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
-const assetDir = resolve(rootDir, '..', 'res');
-const configDir = resolve(assetDir, 'config');
+const nativeModulePath = resolve(rootDir, './dist/astonia-client.js');
 const contentTypes = new Map([
   ['.css', 'text/css; charset=utf-8'],
+  ['.data', 'application/octet-stream'],
   ['.html', 'text/html; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
   ['.mjs', 'text/javascript; charset=utf-8'],
-  ['.json', 'application/json; charset=utf-8'],
-  ['.zip', 'application/zip']
+  ['.wasm', 'application/wasm'],
+  ['.worker.js', 'text/javascript; charset=utf-8']
 ]);
 
 function getOption(name, fallback) {
@@ -32,13 +32,22 @@ const host = getOption('--host', '127.0.0.1');
 const port = Number.parseInt(getOption('--port', '5173'), 10);
 
 function send(res, statusCode, message) {
-  res.writeHead(statusCode, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.writeHead(statusCode, secureHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }));
   res.end(message);
+}
+
+function secureHeaders(headers = {}) {
+  return {
+    'Cross-Origin-Embedder-Policy': 'require-corp',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    ...headers
+  };
 }
 
 function isInsideDirectory(filePath, directory) {
   const directoryPrefix = directory.endsWith(sep) ? directory : `${directory}${sep}`;
-  return filePath.startsWith(directoryPrefix);
+  return filePath === directory || filePath.startsWith(directoryPrefix);
 }
 
 function toFilePath(requestUrl) {
@@ -46,75 +55,12 @@ function toFilePath(requestUrl) {
   const pathname = url.pathname === '/' ? '/index.html' : url.pathname;
   const decodedPathname = decodeURIComponent(pathname);
 
-  if (decodedPathname.startsWith('/assets/')) {
-    const assetName = decodedPathname.slice('/assets/'.length);
-    if (!/^[A-Za-z0-9_.-]+$/.test(assetName)) {
-      return null;
-    }
-
-    const filePath = resolve(assetDir, assetName);
-    return isInsideDirectory(filePath, assetDir) ? filePath : null;
-  }
-
-  if (decodedPathname.startsWith('/config/')) {
-    const configName = decodedPathname.slice('/config/'.length);
-    if (!/^[A-Za-z0-9_.-]+\.json$/.test(configName)) {
-      return null;
-    }
-
-    const filePath = resolve(configDir, configName);
-    return isInsideDirectory(filePath, configDir) ? filePath : null;
-  }
-
-  const filePath = resolve(rootDir, `.${decodedPathname}`);
-
-  return filePath.startsWith(rootDir) ? filePath : null;
-}
-
-function parseRange(rangeHeader, size) {
-  if (!rangeHeader) {
+  if (!decodedPathname.startsWith('/src/') && !decodedPathname.startsWith('/dist/') && decodedPathname !== '/index.html') {
     return null;
   }
 
-  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
-  if (!match) {
-    return undefined;
-  }
-
-  const [, rawStart, rawEnd] = match;
-  if (!rawStart && !rawEnd) {
-    return undefined;
-  }
-
-  if (!rawStart) {
-    const suffixLength = Number.parseInt(rawEnd, 10);
-    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
-      return undefined;
-    }
-
-    return {
-      start: Math.max(size - suffixLength, 0),
-      end: size - 1
-    };
-  }
-
-  const start = Number.parseInt(rawStart, 10);
-  const end = rawEnd ? Number.parseInt(rawEnd, 10) : size - 1;
-
-  if (
-    !Number.isSafeInteger(start) ||
-    !Number.isSafeInteger(end) ||
-    start < 0 ||
-    end < start ||
-    start >= size
-  ) {
-    return undefined;
-  }
-
-  return {
-    start,
-    end: Math.min(end, size - 1)
-  };
+  const filePath = resolve(rootDir, `.${decodedPathname}`);
+  return isInsideDirectory(filePath, rootDir) ? filePath : null;
 }
 
 const server = createServer(async (req, res) => {
@@ -143,36 +89,35 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    const range = parseRange(req.headers.range, fileStat.size);
-    if (range === undefined) {
-      res.writeHead(416, {
-        'Content-Range': `bytes */${fileStat.size}`,
-        'Content-Type': 'text/plain; charset=utf-8'
-      });
-      res.end('Range not satisfiable');
-      return;
-    }
-
-    const statusCode = range ? 206 : 200;
-    const start = range?.start ?? 0;
-    const end = range?.end ?? fileStat.size - 1;
-    const contentLength = range ? end - start + 1 : fileStat.size;
-
-    res.writeHead(statusCode, {
-      'Content-Type': contentTypes.get(extname(filePath)) ?? 'application/octet-stream',
-      'Cache-Control': 'no-store',
-      'Accept-Ranges': 'bytes',
-      'Content-Length': contentLength,
-      ...(range ? { 'Content-Range': `bytes ${start}-${end}/${fileStat.size}` } : {})
-    });
+    const ext = filePath.endsWith('.worker.js') ? '.worker.js' : extname(filePath);
+    res.writeHead(
+      200,
+      secureHeaders({
+        'Content-Type': contentTypes.get(ext) ?? 'application/octet-stream',
+        'Cache-Control': 'no-store',
+        'Content-Length': fileStat.size
+      })
+    );
 
     if (req.method === 'HEAD') {
       res.end();
       return;
     }
 
-    createReadStream(filePath, range ? { start, end } : undefined).pipe(res);
+    createReadStream(filePath).pipe(res);
   } catch {
+    if (req.method === 'HEAD' && filePath === nativeModulePath) {
+      res.writeHead(
+        204,
+        secureHeaders({
+          'Cache-Control': 'no-store',
+          'X-Astonia-Module-Missing': '1'
+        })
+      );
+      res.end();
+      return;
+    }
+
     send(res, 404, 'Not found');
   }
 });
@@ -180,7 +125,7 @@ const server = createServer(async (req, res) => {
 server.listen(port, host, () => {
   const address = server.address();
   const boundPort = typeof address === 'object' && address ? address.port : port;
-  console.log(`Astonia browser shell running at http://${host}:${boundPort}/`);
+  console.log(`Astonia WASM/WebGPU host running at http://${host}:${boundPort}/`);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {

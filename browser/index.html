@@ -3,149 +3,56 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Astonia Browser Shell</title>
+    <title>Astonia WASM/WebGPU Client</title>
     <link rel="stylesheet" href="./src/styles.css" />
     <script type="module" src="./src/main.js"></script>
   </head>
   <body>
-    <main class="shell" aria-labelledby="app-title">
-      <section class="status-panel" aria-label="Client status">
-        <p class="eyebrow">Community client</p>
-        <h1 id="app-title">Astonia Browser Shell</h1>
-
-        <form class="login-bar" data-testid="live-login-form">
+    <main class="app" aria-labelledby="app-title">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">Native browser target</p>
+          <h1 id="app-title">Astonia WASM/WebGPU Client</h1>
+        </div>
+        <form class="launch-bar" data-testid="wasm-launch-form">
           <label>
             <span>Gateway</span>
-            <input name="gateway" autocomplete="off" spellcheck="false" value="ws://127.0.0.1:8787" />
+            <input name="gateway" autocomplete="off" spellcheck="false" />
           </label>
           <label>
             <span>Username</span>
-            <input name="username" autocomplete="username" spellcheck="false" value="BrowserSmoke" />
+            <input name="username" autocomplete="username" spellcheck="false" />
           </label>
           <label>
             <span>Password</span>
-            <input name="password" type="password" autocomplete="current-password" value="fixturecapture" />
+            <input name="password" type="password" autocomplete="current-password" />
           </label>
-          <label class="checkbox-field">
-            <input name="movementPrediction" type="checkbox" data-testid="live-movement-prediction-toggle" checked />
-            <span>Predict</span>
-          </label>
-          <button type="submit">Connect</button>
+          <button type="submit">Launch</button>
         </form>
-
-        <div class="status-grid">
-          <article class="status-card" data-testid="live-status" data-live-state="idle">
-            <div class="status-row">
-              <span class="status-light" aria-hidden="true"></span>
-              <div>
-                <h2 data-testid="live-connection-status">Idle</h2>
-                <p data-live-detail>Not connected.</p>
-              </div>
-            </div>
-          </article>
-          <article class="status-card" data-testid="webgpu-status" data-webgpu-state="checking">
-            <div class="status-row">
-              <span class="status-light" aria-hidden="true"></span>
-              <div>
-                <h2 data-webgpu-title>Checking WebGPU</h2>
-                <p data-webgpu-detail>Preparing the browser renderer capability probe.</p>
-              </div>
-            </div>
-          </article>
-        </div>
       </section>
 
-      <section class="live-layout" aria-label="Live world state">
-        <div class="world-frame">
-          <canvas data-testid="live-world-canvas" width="1" height="1"></canvas>
-        </div>
-
-        <aside class="debug-panel" aria-label="Protocol debug counters">
-          <div class="metric-grid">
-            <div>
-              <span>Ticks</span>
-              <strong data-testid="live-tick-count">0</strong>
-            </div>
-            <div>
-              <span>Current</span>
-              <strong data-testid="live-current-tick">-</strong>
-            </div>
-            <div>
-              <span>Protocol</span>
-              <strong data-testid="live-protocol-version">-</strong>
-            </div>
-            <div>
-              <span>Frames</span>
-              <strong data-testid="live-frame-counts">0 in / 0 out</strong>
-            </div>
-            <div>
-              <span>Buffer</span>
-              <strong data-testid="live-buffer-depth">0/1</strong>
-            </div>
-            <div>
-              <span>Underflows</span>
-              <strong data-testid="live-buffer-underflows">0</strong>
-            </div>
+      <section class="status-grid" aria-label="Target status">
+        <article class="status-card" data-testid="webgpu-status" data-webgpu-state="checking">
+          <span class="status-light" aria-hidden="true"></span>
+          <div>
+            <h2 data-webgpu-title>Checking WebGPU</h2>
+            <p data-webgpu-detail>Preparing native browser target.</p>
           </div>
-
-          <dl class="state-list">
-            <div>
-              <dt>Player</dt>
-              <dd data-testid="live-player-name">-</dd>
-            </div>
-            <div>
-              <dt>Position</dt>
-              <dd data-testid="live-player-position">-</dd>
-            </div>
-            <div>
-              <dt>World</dt>
-              <dd data-testid="live-world-summary">0 cells / 0 characters</dd>
-            </div>
-            <div>
-              <dt>Commands</dt>
-              <dd data-testid="live-command-counts">modeled 0 / skipped 0</dd>
-            </div>
-            <div>
-              <dt>Bytes</dt>
-              <dd data-testid="live-byte-counts">0 in / 0 out</dd>
-            </div>
-            <div>
-              <dt>Arrival</dt>
-              <dd data-testid="live-latency-arrival">last - / avg - / jitter -</dd>
-            </div>
-            <div>
-              <dt>Timing</dt>
-              <dd data-testid="live-latency-timings">decode - / update - / render -</dd>
-            </div>
-            <div>
-              <dt>Target</dt>
-              <dd data-testid="live-buffer-target-change">-</dd>
-            </div>
-            <div>
-              <dt>Move</dt>
-              <dd data-testid="live-last-move-command">-</dd>
-            </div>
-            <div>
-              <dt>Prediction</dt>
-              <dd data-testid="live-movement-prediction">enabled</dd>
-            </div>
-            <div>
-              <dt>Area</dt>
-              <dd data-testid="live-area-retarget">-</dd>
-            </div>
-            <div>
-              <dt>Tick</dt>
-              <dd data-testid="live-last-received-tick">-</dd>
-            </div>
-            <div>
-              <dt>Visible</dt>
-              <dd data-testid="live-last-visible-update">-</dd>
-            </div>
-          </dl>
-
-          <div class="message-log" data-testid="live-message-log" aria-label="Server messages"></div>
-        </aside>
+        </article>
+        <article class="status-card" data-testid="wasm-module-status" data-module-state="checking">
+          <span class="status-light" aria-hidden="true"></span>
+          <div>
+            <h2 data-module-title>Checking Native Module</h2>
+            <p data-module-detail>Looking for the compiled WASM client.</p>
+          </div>
+        </article>
       </section>
+
+      <section class="client-stage" aria-label="Native client">
+        <canvas data-testid="wasm-client-canvas" id="canvas" width="1280" height="720"></canvas>
+      </section>
+
+      <section class="native-log" data-testid="native-log" aria-label="Native client log"></section>
     </main>
   </body>
 </html>

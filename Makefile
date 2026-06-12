@@ -1,4 +1,4 @@
-.PHONY: all debug release windows linux macos macos-appbundle macos-signed-bundle clean distrib distrib-stage amod convert anicopy zig-build docker-linux docker-linux-debug docker-linux-dev docker-distrib-linux appimage zen4-appimage sanitizer coverage test
+.PHONY: all debug release windows linux macos macos-appbundle macos-signed-bundle wasm wasm-check-env clean distrib distrib-stage amod convert anicopy zig-build docker-linux docker-linux-debug docker-linux-dev docker-distrib-linux appimage zen4-appimage sanitizer coverage test
 
 # Root Makefile - Platform dispatcher
 #
@@ -9,6 +9,8 @@
 #   make windows        - Build for Windows
 #   make linux          - Build for Linux
 #   make macos          - Build for macOS
+#   make wasm           - Build the browser WASM/WebGPU target
+#   make wasm-check-env - Check WASM/WebGPU build prerequisites
 #   make zig-build      - Build with zig for current platform
 #   make docker-linux   - Build Linux in Docker (release, Zig build)
 #   make docker-linux-debug - Build Linux in Docker (debug with DEVELOPER)
@@ -117,10 +119,18 @@ macos-signed-bundle:
 	@echo "Building (locally) signing bundle for macOS..."
 	@$(MAKE) -f build/make/Makefile.macos sign
 
+wasm:
+	@echo "Building browser WASM/WebGPU target..."
+	@$(MAKE) -f build/make/Makefile.wasm
+
+wasm-check-env:
+	@$(MAKE) -f build/make/Makefile.wasm check-env
+
 # Clean for all platforms
 clean:
 	@echo "Cleaning all platforms..."
 	@$(foreach platform,$(ALL_PLATFORMS),$(MAKE) -f build/make/Makefile.$(platform) clean 2>/dev/null || true;)
+	@$(MAKE) -f build/make/Makefile.wasm clean 2>/dev/null || true
 	@echo "Cleaning test binaries..."
 	@rm -f bin/test* tests/*.o
 

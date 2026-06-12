@@ -1,5 +1,5 @@
 {
-  "name": "@astonia-community-client/browser-shell",
+  "name": "@astonia-community-client/wasm-webgpu-host",
   "private": true,
   "version": "0.1.0",
   "type": "module",

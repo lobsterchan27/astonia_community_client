@@ -99,11 +99,26 @@ brew install cmake ninja zig libpng zlib libzip mimalloc rust
 make build-sdl3 build-sdl3-mixer
 ```
 
+### Browser WASM/WebGPU
+
+The browser target is the native client compiled to WASM with a WebGPU renderer.
+The browser code under `browser/` only hosts the generated native module from
+`browser/dist/`.
+
+Check the local toolchain:
+
+```bash
+make wasm-check-env
+```
+
+See `docs/wasm-webgpu.md` for the target boundary and vertical slices.
+
 ## Commands
 
 ```bash
 make            # Build for current platform
 make zig-build  # Build using Zig
+make wasm       # Build browser WASM/WebGPU target
 make distrib    # Create distribution package
 make amod       # Build mod (src/amod/)
 make clean      # Clean up build assets

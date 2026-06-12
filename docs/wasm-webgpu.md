@@ -1,0 +1,75 @@
+# WASM/WebGPU Browser Target
+
+The browser target is the native Astonia client compiled to WASM with a WebGPU
+renderer. Browser-hosted logic is limited to platform integration.
+
+## Boundary
+
+Browser JavaScript is allowed to:
+
+- Load the generated Emscripten module from `browser/dist/`.
+- Own small launch UI state such as username, password, and gateway URL.
+- Provide browser platform APIs to native code, including WebSocket transport
+  and WebGPU handles.
+- Report startup/build errors.
+
+Browser JavaScript is not allowed to:
+
+- Decode the Astonia protocol into game state.
+- Replay ticks.
+- Predict movement.
+- Build render lists.
+- Render sprites, tiles, or fallback world pixels.
+
+The C client remains authoritative for protocol, simulation, input, and drawing.
+
+## Required Slices
+
+1. WASM/WebGPU build environment.
+   Install Emscripten, verify `emcc`, and make `make wasm-check-env` pass.
+
+2. Native loop browser entry.
+   Split the blocking `main_loop()` in `src/gui/gui_core.c` into a per-frame
+   step that can run under the browser frame callback without changing tick
+   semantics.
+
+3. Browser transport shim.
+   Provide `astonia_net_*` symbols for WASM that use a WebSocket to the gateway
+   and keep the existing byte protocol unchanged.
+
+4. WebGPU renderer backend.
+   Implement the existing client render surface for the WASM build with WebGPU.
+   Desktop SDL remains a native platform backend, not the browser renderer.
+
+5. Asset filesystem.
+   Package `res/` for the WASM module so native code opens the same paths it
+   already expects.
+
+6. Browser smoke.
+   Launch the generated native module from `browser/`, connect through the
+   gateway, and verify that the real client owns the canvas.
+
+## Commands
+
+Check whether this host can build the target:
+
+```bash
+make wasm-check-env
+```
+
+Start the browser host:
+
+```bash
+cd browser
+npm install
+npm run dev -- --host 0.0.0.0 --port 5173
+```
+
+The generated native module is expected at:
+
+```text
+browser/dist/astonia-client.js
+```
+
+The browser host intentionally does not contain an alternate renderer path. If
+the native WASM module is missing, it reports a build-required state instead.
