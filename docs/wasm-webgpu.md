@@ -77,11 +77,12 @@ make wasm
 ```
 
 This compiles `browser/dist/astonia-client.js` from the WASM-only Sokol WebGPU
-backend and a minimal native harness. The harness enters through the existing
-`sdl_init`, `sdl_clear`, `sdl_render`, and `sdl_exit` lifecycle calls; the
-WASM-only bridge delegates those calls to Sokol WebGPU. It deliberately does
-not contain protocol replay, sprite rendering, network transport, or the
-browser frame-pump split owned by later slices.
+backend, the WASM `astonia_net_*` browser transport shim, the packaged native
+resource filesystem, and a minimal native harness. The harness enters through
+the existing `sdl_init`, `sdl_clear`, `sdl_render`, and `sdl_exit` lifecycle
+calls; the WASM-only render bridge delegates those calls to Sokol WebGPU. It
+deliberately does not contain protocol replay, sprite rendering, or the browser
+frame-pump split owned by later slices.
 
 ## Asset Filesystem
 
@@ -118,6 +119,17 @@ After `make wasm`, `cd browser && npm test` loads the generated module with
 `noInitialRun` and calls the exported resource filesystem probe. That probe
 opens representative graphics, sound, font, cursor, and config files through
 the WASM filesystem and verifies signatures or JSON readability.
+
+Run the focused browser transport shim harness:
+
+```bash
+cd browser
+ASTONIA_EMSDK_ROOT=/path/to/emsdk npm test -- wasm-net-shim.spec.mjs
+```
+
+The harness compiles `tests/wasm_net_shim_harness.c` into ignored files under
+`browser/dist/` and verifies connect, poll, send, recv, close, failure, and
+`target-port` retargeting through a local WebSocket byte server.
 
 Run the dependency-light renderer API check:
 

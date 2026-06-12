@@ -15,10 +15,14 @@ SOKOL_DIR := third_party/sokol
 WASM_SRCS := \
 	src/wasm/sokol_webgpu_harness.c \
 	src/wasm/resource_fs_check.c \
+	src/wasm/astonia_net_wasm.c \
 	src/wasm/sokol_sdl_renderer.c \
 	src/render_backend/sokol_webgpu_backend.c \
 	src/render_backend/sokol_webgpu_sokol.c
 RESOURCE_FILES := $(shell find res -type f | sort)
+
+WASM_JS_LIBS := \
+	src/wasm/astonia_net_jslib.js
 
 WASM_CFLAGS := \
 	-std=c99 \
@@ -35,6 +39,7 @@ WASM_CFLAGS := \
 
 WASM_FLAGS := \
 	--preload-file res@/res \
+	$(foreach lib,$(WASM_JS_LIBS),--js-library $(lib)) \
 	--use-port=emdawnwebgpu \
 	-sENVIRONMENT=web \
 	-sMODULARIZE=1 \
@@ -47,7 +52,7 @@ WASM_FLAGS := \
 
 all: check-env $(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA)
 
-$(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA) &: $(WASM_SRCS) src/render_backend/render_backend.h src/render_backend/sokol_webgpu_backend.h \
+$(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA) &: $(WASM_SRCS) $(WASM_JS_LIBS) src/render_backend/render_backend.h src/render_backend/sokol_webgpu_backend.h \
 		$(SOKOL_DIR)/sokol_app.h $(SOKOL_DIR)/sokol_gfx.h $(SOKOL_DIR)/sokol_glue.h $(SOKOL_DIR)/sokol_log.h \
 		$(RESOURCE_FILES)
 	@mkdir -p $(OUT_DIR)

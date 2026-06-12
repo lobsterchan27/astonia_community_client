@@ -45,8 +45,40 @@ The gateway keeps the TCP host fixed to `--tcp-host`. `target-port` can only
 select a TCP port inside `--target-port-range`; requests outside that range are
 rejected during the WebSocket handshake.
 
+## WASM Client Transport
+
+The WASM client still calls the native `astonia_net_*` C ABI declared in
+`include/astonia_net.h`. For Emscripten builds, `src/wasm/astonia_net_wasm.c`
+implements those symbols and delegates only browser WebSocket operations to
+`src/wasm/astonia_net_jslib.js`.
+
+The `-d` command-line value is treated as the WebSocket gateway URL. Each
+`astonia_net_connect(host, port, 0)` opens that gateway URL and sets
+`target-port=<port>` on the query string while preserving existing query
+parameters. This lets the existing native reconnect path retarget area-server
+ports after `SV_SERVER` updates `target_port`; browser JavaScript does not
+decode that protocol message.
+
+The transport behavior mirrors the native non-blocking interface:
+
+- `astonia_net_poll(..., READ, ...)` reports readable data when queued bytes are
+  available, or after close so `astonia_net_recv` can return `0`.
+- `astonia_net_poll(..., WRITE, ...)` reports writable only after the WebSocket
+  opens, and reports `-1` if the socket fails before opening.
+- `astonia_net_send` copies raw bytes into one binary WebSocket message and
+  returns the byte count accepted by the browser.
+- `astonia_net_recv` drains queued binary message bytes in order and may return
+  partial reads.
+- `astonia_net_close` closes the WebSocket and frees the native handle.
+
+Browsers do not expose local or peer TCP IPv4 addresses for WebSockets. The
+WASM shim writes `0` to `astonia_net_local_ipv4` and `astonia_net_peer_ipv4`
+outputs and returns success so the existing client `send_info` packet remains
+deterministic.
+
 ## Test
 
 ```bash
 cargo test --manifest-path gateway/Cargo.toml
+cd browser && ASTONIA_EMSDK_ROOT=/path/to/emsdk npm test -- wasm-net-shim.spec.mjs
 ```
