@@ -40,6 +40,8 @@ const liveSession = new AstoniaLiveSession({
   }
 });
 let spriteAssetsPromise = null;
+let spriteAssets = null;
+const spriteImageCache = new Map();
 let renderSerial = 0;
 
 function setWebGpuStatus(state, title, detail) {
@@ -159,11 +161,24 @@ async function updateLiveView(state) {
   if (state.renderList) {
     const serial = ++renderSerial;
     const renderStartedAt = performance.now();
-    await renderAstoniaRenderListToCanvas(worldCanvas, state.renderList);
+    const hadSpriteAssets = Boolean(spriteAssets);
+
+    if (hadSpriteAssets) {
+      await renderAstoniaRenderListToCanvas(worldCanvas, state.renderList, {
+        spriteAssets,
+        imageCache: spriteImageCache
+      });
+    } else {
+      await renderAstoniaRenderListToCanvas(worldCanvas, state.renderList);
+    }
+
     try {
       const assets = await getSpriteAssets();
-      if (serial === renderSerial) {
-        await renderAstoniaRenderListToCanvas(worldCanvas, state.renderList, { spriteAssets: assets });
+      if (serial === renderSerial && !hadSpriteAssets) {
+        await renderAstoniaRenderListToCanvas(worldCanvas, state.renderList, {
+          spriteAssets: assets,
+          imageCache: spriteImageCache
+        });
       }
     } catch {
       if (serial === renderSerial) {
@@ -198,7 +213,10 @@ function defaultGatewayUrl() {
 }
 
 function getSpriteAssets() {
-  spriteAssetsPromise ??= loadSpriteAssets();
+  spriteAssetsPromise ??= loadSpriteAssets().then((assets) => {
+    spriteAssets = assets;
+    return assets;
+  });
   return spriteAssetsPromise;
 }
 

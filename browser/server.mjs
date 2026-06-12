@@ -6,11 +6,13 @@ import { fileURLToPath } from 'node:url';
 
 const rootDir = fileURLToPath(new URL('.', import.meta.url));
 const assetDir = resolve(rootDir, '..', 'res');
+const configDir = resolve(assetDir, 'config');
 const contentTypes = new Map([
   ['.css', 'text/css; charset=utf-8'],
   ['.html', 'text/html; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
   ['.mjs', 'text/javascript; charset=utf-8'],
+  ['.json', 'application/json; charset=utf-8'],
   ['.zip', 'application/zip']
 ]);
 
@@ -52,6 +54,16 @@ function toFilePath(requestUrl) {
 
     const filePath = resolve(assetDir, assetName);
     return isInsideDirectory(filePath, assetDir) ? filePath : null;
+  }
+
+  if (decodedPathname.startsWith('/config/')) {
+    const configName = decodedPathname.slice('/config/'.length);
+    if (!/^[A-Za-z0-9_.-]+\.json$/.test(configName)) {
+      return null;
+    }
+
+    const filePath = resolve(configDir, configName);
+    return isInsideDirectory(filePath, configDir) ? filePath : null;
   }
 
   const filePath = resolve(rootDir, `.${decodedPathname}`);

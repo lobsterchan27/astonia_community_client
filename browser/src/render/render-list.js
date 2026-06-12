@@ -38,7 +38,7 @@ export function createAstoniaRenderList(snapshot, options = {}) {
   const projection = createIsoProjection({ cells, characters, tileWidth, tileHeight, padding });
   const commands = [
     ...mapCellSpriteCommands(cells, projection),
-    ...characterSpriteCommands(characters, snapshot.playersById ?? {}, projection)
+    ...characterSpriteCommands(characters, snapshot.playersById ?? {}, projection, snapshot.player)
   ].sort(compareRenderCommands);
 
   return {
@@ -87,16 +87,23 @@ function mapCellSpriteCommands(cells, projection) {
   return commands;
 }
 
-function characterSpriteCommands(characters, playersById, projection) {
+function characterSpriteCommands(characters, playersById, projection, player) {
   return characters
     .map((character) => {
       const knownPlayer = playersById[String(character.id)] ?? playersById[character.id] ?? null;
+      const isPlayer = player?.id !== undefined && player?.id !== null && String(character.id) === String(player.id);
 
       return {
         id: `character:${character.local.x},${character.local.y}:${character.spriteId}:${character.id}`,
         type: 'sprite',
         layer: 'character',
         spriteId: normalizeSpriteId(character.spriteId),
+        animation: {
+          action: normalizeAnimationValue(character.action),
+          duration: normalizeAnimationValue(character.duration),
+          step: normalizeAnimationValue(character.step),
+          direction: normalizeAnimationValue(character.direction)
+        },
         local: clonePoint(character.local),
         world: clonePoint(character.world),
         screen: projection.project(character.local),
@@ -104,7 +111,8 @@ function characterSpriteCommands(characters, playersById, projection) {
         entity: {
           id: character.id,
           name: character.name ?? knownPlayer?.name ?? null,
-          health: character.health ?? null
+          health: character.health ?? null,
+          isPlayer
         }
       };
     })
@@ -163,6 +171,10 @@ function characterFallbackColor() {
 
 function normalizeSpriteId(spriteId) {
   return Number.isInteger(spriteId) && spriteId > 0 ? spriteId : 0;
+}
+
+function normalizeAnimationValue(value) {
+  return Number.isInteger(value) ? value : null;
 }
 
 function positiveIntegerOption(value, fallback, name) {

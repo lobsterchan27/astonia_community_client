@@ -1,6 +1,7 @@
 import { decodeRenderListSprites } from './sprite-resolver.js';
+import { resolveAstoniaRenderListSprites } from './sprite-transforms.js';
 
-const MAX_DECODED_SPRITES = 48;
+const MAX_DECODED_SPRITES = 192;
 
 export async function renderAstoniaRenderListToCanvas(canvas, renderList, options = {}) {
   if (!canvas || typeof canvas.getContext !== 'function') {
@@ -29,14 +30,16 @@ export async function renderAstoniaRenderListToCanvas(canvas, renderList, option
     drawFallback(context, command);
   }
 
+  const spriteRenderList = await resolveTexturedRenderList(renderList, options);
   const spriteResolution = options.spriteAssets
-    ? await decodeRenderListSprites(renderList, options.spriteAssets, {
+    ? await decodeRenderListSprites(spriteRenderList, options.spriteAssets, {
         maxSprites: options.maxDecodedSprites ?? MAX_DECODED_SPRITES
       })
     : emptySpriteResolution();
-  const imageCache = new Map();
+  const imageCache = options.imageCache ?? new Map();
+  const closeCachedImages = !options.imageCache;
 
-  for (const command of renderList.commands) {
+  for (const command of spriteRenderList.commands) {
     const sprite = spriteResolution.decodedSprites.get(command.spriteId);
     if (sprite) {
       const image = imageCache.get(sprite.spriteId) ?? spriteToCanvasSource(sprite);
@@ -45,8 +48,16 @@ export async function renderAstoniaRenderListToCanvas(canvas, renderList, option
     }
   }
 
-  for (const image of imageCache.values()) {
-    image.close?.();
+  for (const command of renderList.commands) {
+    if (command.entity?.isPlayer) {
+      drawPlayerMarker(context, command);
+    }
+  }
+
+  if (closeCachedImages) {
+    for (const image of imageCache.values()) {
+      image.close?.();
+    }
   }
 
   return {
@@ -55,6 +66,21 @@ export async function renderAstoniaRenderListToCanvas(canvas, renderList, option
     missingSprites: spriteResolution.missing.length,
     skippedSprites: spriteResolution.skipped.length
   };
+}
+
+async function resolveTexturedRenderList(renderList, options) {
+  if (options.resolveSpriteTransforms === false) {
+    return renderList;
+  }
+
+  try {
+    return await resolveAstoniaRenderListSprites(
+      renderList,
+      options.spriteTransformConfig ? { config: options.spriteTransformConfig } : {}
+    );
+  } catch {
+    return renderList;
+  }
 }
 
 function drawFallback(context, command) {
@@ -75,6 +101,23 @@ function drawFallback(context, command) {
   context.lineTo(x - 20, y + 10);
   context.closePath();
   context.fill();
+}
+
+function drawPlayerMarker(context, command) {
+  const { x, y } = command.screen;
+  context.save();
+  context.strokeStyle = '#f5f1e8';
+  context.lineWidth = 3;
+  context.beginPath();
+  context.arc(x, y - 12, 14, 0, Math.PI * 2);
+  context.stroke();
+
+  context.strokeStyle = '#151719';
+  context.lineWidth = 1;
+  context.beginPath();
+  context.arc(x, y - 12, 17, 0, Math.PI * 2);
+  context.stroke();
+  context.restore();
 }
 
 function spriteToCanvasSource(sprite) {

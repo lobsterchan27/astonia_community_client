@@ -47,6 +47,7 @@ async function fixtureRenderListSummary(page) {
         .filter((command) => command.layer === 'character')
         .map((command) => ({
           spriteId: command.spriteId,
+          animation: command.animation,
           local: command.local,
           world: command.world,
           entity: command.entity,
@@ -64,6 +65,7 @@ async function fixtureRenderAssetSummary(page) {
     const { AstoniaProtocolStateReplay } = await import('/src/protocol/state-replay.js');
     const { createAstoniaRenderList } = await import('/src/render/render-list.js');
     const { decodeRenderListSprites } = await import('/src/render/sprite-resolver.js');
+    const { resolveAstoniaRenderListSprites } = await import('/src/render/sprite-transforms.js');
     const replay = new AstoniaProtocolStateReplay();
 
     function base64ToBytes(base64) {
@@ -79,16 +81,23 @@ async function fixtureRenderAssetSummary(page) {
       replay.replayTickPayload(base64ToBytes(tick.data), { tickIndex: tick.index });
     }
 
-    const renderList = createAstoniaRenderList(replay.snapshot());
+    const renderList = await resolveAstoniaRenderListSprites(createAstoniaRenderList(replay.snapshot()));
     const assets = await loadSpriteAssets({
       baseArchives: ['gx1.zip'],
       optionalArchives: []
     });
     const decoded = await decodeRenderListSprites(renderList, assets, {
-      spriteIds: [2, 12_008, 147, 99_999_999]
+      spriteIds: [102_001, 12_008, 104_007, 12_091, 99_999_999]
     });
 
     return {
+      transformedCharacters: renderList.commands
+        .filter((command) => command.layer === 'character')
+        .map((command) => ({
+          spriteId: command.spriteId,
+          sourceSpriteId: command.sourceSpriteId,
+          spriteTransform: command.spriteTransform
+        })),
       decoded: decoded.decoded.map((sprite) => ({
         spriteId: sprite.spriteId,
         entryName: sprite.entryName,
@@ -136,7 +145,7 @@ async function fixtureWebGpuRenderResult(page) {
 
     return renderAstoniaRenderListWithWebGpu(canvas, renderList, {
       spriteAssets: assets,
-      spriteIds: [2, 12_008],
+      spriteIds: [102_001, 12_008, 104_007],
       samplePixels: true
     });
   }, ticks);
@@ -184,23 +193,37 @@ test('replayed fixture snapshot converts to a stable neutral sprite render list'
   expect(summary.fixtureCharacterCommands).toEqual([
     {
       spriteId: 2,
+      animation: {
+        action: 0,
+        duration: 6,
+        step: 0,
+        direction: 2
+      },
       local: { x: 25, y: 25 },
       world: { x: 126, y: 179 },
       entity: {
         id: 219,
         name: 'FixtureCapture',
-        health: 100
+        health: 100,
+        isPlayer: true
       },
       fallbackColor: '#c9b37a'
     },
     {
       spriteId: 147,
+      animation: {
+        action: 0,
+        duration: 24,
+        step: 0,
+        direction: 8
+      },
       local: { x: 21, y: 29 },
       world: { x: 122, y: 183 },
       entity: {
         id: 351,
         name: 'James',
-        health: 100
+        health: 100,
+        isPlayer: false
       },
       fallbackColor: '#c9b37a'
     }
@@ -212,10 +235,32 @@ test('render list sprites decode through the existing asset catalog where availa
 
   const summary = await fixtureRenderAssetSummary(page);
 
+  expect(summary.transformedCharacters).toEqual([
+    {
+      spriteId: 102_001,
+      sourceSpriteId: 2,
+      spriteTransform: {
+        type: 'character',
+        baseSpriteId: 2,
+        action: 0,
+        direction: 2
+      }
+    },
+    {
+      spriteId: 104_007,
+      sourceSpriteId: 147,
+      spriteTransform: {
+        type: 'character',
+        baseSpriteId: 4,
+        action: 0,
+        direction: 8
+      }
+    }
+  ]);
   expect(summary.decoded).toEqual([
     {
-      spriteId: 2,
-      entryName: '00000002.png',
+      spriteId: 102_001,
+      entryName: '00102001.png',
       archiveName: 'gx1.zip',
       width: expect.any(Number),
       height: expect.any(Number),
@@ -228,20 +273,87 @@ test('render list sprites decode through the existing asset catalog where availa
       width: expect.any(Number),
       height: expect.any(Number),
       pixelByteLength: expect.any(Number)
+    },
+    {
+      spriteId: 104_007,
+      entryName: '00104007.png',
+      archiveName: 'gx1.zip',
+      width: expect.any(Number),
+      height: expect.any(Number),
+      pixelByteLength: expect.any(Number)
+    },
+    {
+      spriteId: 12_091,
+      entryName: '00012091.png',
+      archiveName: 'gx1.zip',
+      width: expect.any(Number),
+      height: expect.any(Number),
+      pixelByteLength: expect.any(Number)
     }
   ]);
   expect(summary.decoded[0].pixelByteLength).toBe(summary.decoded[0].width * summary.decoded[0].height * 4);
   expect(summary.decoded[1].pixelByteLength).toBe(summary.decoded[1].width * summary.decoded[1].height * 4);
   expect(summary.missing).toEqual([
     {
-      spriteId: 147,
-      reason: 'not-found'
-    },
-    {
       spriteId: 99_999_999,
       reason: 'not-found'
     }
   ]);
+});
+
+test('sprite resolver prioritizes character sprites inside the decode budget', async ({ page }) => {
+  const ticks = await readNdjson('fixtures/protocol/docker-login-tick/ticks.ndjson');
+
+  await page.goto('/');
+
+  const summary = await page.evaluate(async (serializedTicks) => {
+    const { AstoniaProtocolStateReplay } = await import('/src/protocol/state-replay.js');
+    const { createAstoniaRenderList } = await import('/src/render/render-list.js');
+    const { decodeRenderListSprites } = await import('/src/render/sprite-resolver.js');
+    const { resolveAstoniaRenderListSprites } = await import('/src/render/sprite-transforms.js');
+    const replay = new AstoniaProtocolStateReplay();
+
+    function base64ToBytes(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return bytes;
+    }
+
+    for (const tick of serializedTicks) {
+      replay.replayTickPayload(base64ToBytes(tick.data), { tickIndex: tick.index });
+    }
+
+    const renderList = await resolveAstoniaRenderListSprites(createAstoniaRenderList(replay.snapshot()));
+    const decoded = await decodeRenderListSprites(
+      renderList,
+      {
+        hasSprite: () => true,
+        async decodeSprite(spriteId) {
+          return {
+            spriteId,
+            entryName: `${spriteId}.png`,
+            archiveName: 'test.zip',
+            width: 1,
+            height: 1,
+            pixels: new Uint8ClampedArray([0, 0, 0, 0])
+          };
+        }
+      },
+      { maxSprites: 48 }
+    );
+
+    return {
+      decodedSpriteIds: decoded.decoded.map((sprite) => sprite.spriteId),
+      skippedSpriteIds: decoded.skipped.map((sprite) => sprite.spriteId)
+    };
+  }, ticks);
+
+  expect(summary.decodedSpriteIds).toContain(102_001);
+  expect(summary.decodedSpriteIds).toContain(104_007);
+  expect(summary.skippedSpriteIds).not.toContain(102_001);
 });
 
 test('2d canvas renderer keeps fallback pixels visible while sprite decode is pending', async ({ page }) => {
@@ -342,6 +454,86 @@ test('2d canvas renderer keeps fallback pixels visible while sprite decode is pe
   });
 });
 
+test('2d canvas renderer reuses caller-owned sprite image cache between frames', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const { renderAstoniaRenderListToCanvas } = await import('/src/render/canvas-renderer.js');
+    const canvas = document.createElement('canvas');
+    document.body.append(canvas);
+    const imageCache = new Map();
+    const renderList = {
+      schemaVersion: 1,
+      viewport: {
+        canvasWidth: 64,
+        canvasHeight: 64,
+        tileWidth: 40,
+        tileHeight: 20
+      },
+      commands: [
+        {
+          id: 'character:0,0:2:1',
+          type: 'sprite',
+          layer: 'character',
+          spriteId: 2,
+          local: { x: 0, y: 0 },
+          world: { x: 126, y: 179 },
+          screen: { x: 32, y: 32 },
+          fallbackColor: '#c9b37a',
+          entity: {
+            id: 1,
+            name: 'BrowserSmoke',
+            health: 100,
+            isPlayer: true
+          }
+        }
+      ]
+    };
+    const spriteAssets = {
+      hasSprite: () => true,
+      async decodeSprite(spriteId) {
+        return {
+          spriteId,
+          entryName: '00000002.png',
+          archiveName: 'test.zip',
+          width: 1,
+          height: 1,
+          pixels: new Uint8ClampedArray([255, 0, 0, 255])
+        };
+      }
+    };
+
+    await renderAstoniaRenderListToCanvas(canvas, renderList, { spriteAssets, imageCache });
+    const firstImage = imageCache.get(102_000);
+    await renderAstoniaRenderListToCanvas(canvas, renderList, { spriteAssets, imageCache });
+    const secondImage = imageCache.get(102_000);
+
+    return {
+      cacheSize: imageCache.size,
+      reusedImage: firstImage === secondImage,
+      hasPlayerMarker: sampleCanvasForMarker(canvas)
+    };
+
+    function sampleCanvasForMarker(target) {
+      const context = target.getContext('2d');
+      const data = context.getImageData(0, 0, target.width, target.height).data;
+      let markerPixels = 0;
+      for (let index = 0; index < data.length; index += 4) {
+        if (data[index] === 245 && data[index + 1] === 241 && data[index + 2] === 232 && data[index + 3] === 255) {
+          markerPixels += 1;
+        }
+      }
+      return markerPixels > 0;
+    }
+  });
+
+  expect(result).toEqual({
+    cacheSize: 1,
+    reusedImage: true,
+    hasPlayerMarker: true
+  });
+});
+
 test('WebGPU render tracer reports an explicit skip when GPU access is unavailable', async ({ page }) => {
   await page.goto('/');
 
@@ -411,8 +603,9 @@ test('WebGPU render tracer renders fixture commands to nonblank pixels when GPU 
     },
     sprites: {
       decoded: expect.arrayContaining([
-        expect.objectContaining({ spriteId: 2, archiveName: 'gx1.zip' }),
-        expect.objectContaining({ spriteId: 12_008, archiveName: 'gx1.zip' })
+        expect.objectContaining({ spriteId: 102_001, archiveName: 'gx1.zip' }),
+        expect.objectContaining({ spriteId: 12_008, archiveName: 'gx1.zip' }),
+        expect.objectContaining({ spriteId: 104_007, archiveName: 'gx1.zip' })
       ]),
       missing: []
     },

@@ -1,4 +1,5 @@
 import { decodeRenderListSprites } from './sprite-resolver.js';
+import { resolveAstoniaRenderListSprites } from './sprite-transforms.js';
 
 const CLEAR_COLOR = { r: 0, g: 0, b: 0, a: 1 };
 const READBACK_FORMAT = 'rgba8unorm';
@@ -53,8 +54,9 @@ export async function renderAstoniaRenderListWithWebGpu(canvas, renderList, opti
       return skipped('webgpu-context-unavailable', errorMessage(error));
     }
 
+    const spriteRenderList = await resolveTexturedRenderList(renderList, options);
     const spriteResolution = options.spriteAssets
-      ? await decodeRenderListSprites(renderList, options.spriteAssets, {
+      ? await decodeRenderListSprites(spriteRenderList, options.spriteAssets, {
           spriteIds: options.spriteIds,
           maxSprites: options.maxDecodedSprites ?? DEFAULT_MAX_DECODED_SPRITES
         })
@@ -63,7 +65,7 @@ export async function renderAstoniaRenderListWithWebGpu(canvas, renderList, opti
     const pipelines = new PipelineCache(device);
     const frame = createFrameResources(
       device,
-      renderList,
+      spriteRenderList,
       spriteResolution.decodedSprites,
       width,
       height,
@@ -113,7 +115,7 @@ export async function renderAstoniaRenderListWithWebGpu(canvas, renderList, opti
         format
       },
       draw: {
-        fallbackCommands: renderList.commands.length,
+        fallbackCommands: spriteRenderList.commands.length,
         texturedCommands: frame.texturedCommandCount
       },
       sprites: {
@@ -125,6 +127,21 @@ export async function renderAstoniaRenderListWithWebGpu(canvas, renderList, opti
     };
   } finally {
     device.destroy();
+  }
+}
+
+async function resolveTexturedRenderList(renderList, options) {
+  if (options.resolveSpriteTransforms === false) {
+    return renderList;
+  }
+
+  try {
+    return await resolveAstoniaRenderListSprites(
+      renderList,
+      options.spriteTransformConfig ? { config: options.spriteTransformConfig } : {}
+    );
+  } catch {
+    return renderList;
   }
 }
 

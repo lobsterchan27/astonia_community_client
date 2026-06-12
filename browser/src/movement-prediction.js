@@ -1,4 +1,4 @@
-export const DEFAULT_MOVEMENT_PREDICTION_CONFIRMATION_TICKS = 3;
+export const DEFAULT_MOVEMENT_PREDICTION_CONFIRMATION_TICKS = 12;
 
 export function normalizeMovementPredictionOptions(options = {}) {
   if (options === false) {
