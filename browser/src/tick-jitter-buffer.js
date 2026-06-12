@@ -23,6 +23,7 @@ export class AdaptiveTickJitterBuffer {
   #lastPlaybackAtMs;
   #playing;
   #waitingForArrival;
+  #recoveringSinceMs;
   #metrics;
 
   constructor(options = {}) {
@@ -43,6 +44,7 @@ export class AdaptiveTickJitterBuffer {
     this.#lastPlaybackAtMs = null;
     this.#playing = false;
     this.#waitingForArrival = false;
+    this.#recoveringSinceMs = null;
     this.#metrics = initialMetrics(this.#targetDepth, this.#estimatedTickIntervalMs());
   }
 
@@ -57,6 +59,9 @@ export class AdaptiveTickJitterBuffer {
     }
     if (this.#firstQueuedAtMs === null) {
       this.#firstQueuedAtMs = nowMs;
+    }
+    if (this.#waitingForArrival && this.#targetDepth > this.#options.minTargetDepth) {
+      this.#recoveringSinceMs ??= this.#firstQueuedAtMs;
     }
     this.#waitingForArrival = false;
     this.#metrics.ticksQueued += ticks.length;
@@ -88,6 +93,7 @@ export class AdaptiveTickJitterBuffer {
     const entry = this.#queue.shift();
     this.#playing = true;
     this.#waitingForArrival = false;
+    this.#recoveringSinceMs = null;
     this.#lastPlaybackAtMs = nowMs;
     this.#firstQueuedAtMs = this.#queue.length > 0 ? this.#queue[0].queuedAtMs : null;
     this.#metrics.ticksReplayed += 1;
@@ -107,6 +113,15 @@ export class AdaptiveTickJitterBuffer {
 
     if (this.#queue.length > this.#targetDepth) {
       return 0;
+    }
+
+    if (this.#recoveringSinceMs !== null) {
+      if (this.#queue.length >= this.#targetDepth) {
+        return 0;
+      }
+
+      const holdMs = Math.min(this.#options.maxInitialHoldMs, intervalMs * this.#targetDepth);
+      return Math.max(0, holdMs - (nowMs - this.#recoveringSinceMs));
     }
 
     if (!this.#playing || this.#waitingForArrival) {

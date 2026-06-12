@@ -79,6 +79,65 @@ test('adaptive jitter buffer records underflow and raises the target', async ({ 
   });
 });
 
+test('adaptive jitter buffer holds playback after underflow until recovery depth or bounded hold', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const { AdaptiveTickJitterBuffer } = await import('/src/tick-jitter-buffer.js');
+    const buffer = new AdaptiveTickJitterBuffer({
+      fallbackTickIntervalMs: 50,
+      maxInitialHoldMs: 75
+    });
+
+    buffer.enqueueTicks([{ id: 1 }], 0);
+    buffer.takeTick(50);
+    buffer.enqueueTicks([{ id: 2 }], 50);
+    buffer.takeTick(100);
+    buffer.enqueueTicks([{ id: 3 }], 100);
+    buffer.takeTick(150);
+
+    const underflowDelay = buffer.nextDelayMs(150);
+    const underflowTick = buffer.takeTick(200);
+    const afterUnderflow = buffer.metrics();
+
+    buffer.enqueueTicks([{ id: 4 }], 200);
+    const oneOfTwoDelay = buffer.nextDelayMs(200);
+    const prematureTick = oneOfTwoDelay === 0 ? buffer.takeTick(200) : null;
+
+    buffer.enqueueTicks([{ id: 5 }], 240);
+    const rebuiltDelay = buffer.nextDelayMs(240);
+    const rebuiltTick = rebuiltDelay === 0 ? buffer.takeTick(240) : null;
+
+    return {
+      underflowDelay,
+      underflowTick,
+      afterUnderflow,
+      oneOfTwoDelay,
+      prematureTick,
+      rebuiltDelay,
+      rebuiltTick,
+      finalMetrics: buffer.metrics()
+    };
+  });
+
+  expect(result.underflowDelay).toBe(50);
+  expect(result.underflowTick).toBeNull();
+  expect(result.afterUnderflow).toMatchObject({
+    queueDepth: 0,
+    targetQueueDepth: 2,
+    underflows: 1
+  });
+  expect(result.oneOfTwoDelay).toBe(75);
+  expect(result.prematureTick).toBeNull();
+  expect(result.rebuiltDelay).toBe(0);
+  expect(result.rebuiltTick).toEqual({ id: 4 });
+  expect(result.finalMetrics).toMatchObject({
+    queueDepth: 1,
+    targetQueueDepth: 2,
+    ticksReplayed: 4
+  });
+});
+
 test('adaptive jitter buffer targets one tick under steady low jitter', async ({ page }) => {
   await page.goto('/');
 
@@ -126,4 +185,88 @@ test('adaptive jitter buffer raises target for bursty delivery and can settle ba
   );
   expect(metrics.targetQueueDepth).toBe(1);
   expect(metrics.maxQueueDepth).toBeGreaterThanOrEqual(3);
+});
+
+test('adaptive jitter buffer plays through bursty delivery at the adapted target depth', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const { AdaptiveTickJitterBuffer } = await import('/src/tick-jitter-buffer.js');
+    const buffer = new AdaptiveTickJitterBuffer({
+      fallbackTickIntervalMs: 50,
+      maxInitialHoldMs: 75,
+      stableSampleThreshold: 4
+    });
+    const played = [];
+    let nowMs = 0;
+    let nextPlaybackAtMs = null;
+
+    function tick(id) {
+      return { id };
+    }
+
+    function schedule() {
+      const delayMs = buffer.nextDelayMs(nowMs);
+      nextPlaybackAtMs = delayMs === null ? null : nowMs + delayMs;
+      return delayMs;
+    }
+
+    function takeDuePlayback(untilMs) {
+      while (nextPlaybackAtMs !== null && nextPlaybackAtMs <= untilMs) {
+        nowMs = nextPlaybackAtMs;
+        const replayed = buffer.takeTick(nowMs);
+        if (replayed) {
+          played.push({ atMs: nowMs, tick: replayed, metrics: buffer.metrics() });
+        }
+        schedule();
+      }
+      nowMs = untilMs;
+    }
+
+    buffer.enqueueTicks([tick('steady-0')], 0);
+    schedule();
+    takeDuePlayback(50);
+    buffer.enqueueTicks([tick('steady-1')], 50);
+    schedule();
+    takeDuePlayback(100);
+    buffer.enqueueTicks([tick('steady-2')], 100);
+    schedule();
+    takeDuePlayback(150);
+    nowMs = 300;
+
+    buffer.enqueueTicks([tick('burst-0'), tick('burst-1'), tick('burst-2')], 300);
+    const burstDelay = schedule();
+    const burstMetrics = buffer.metrics();
+    takeDuePlayback(300);
+    const afterFirstBurstReplay = buffer.metrics();
+    const followUpDelay = schedule();
+
+    return {
+      burstDelay,
+      burstMetrics,
+      afterFirstBurstReplay,
+      followUpDelay,
+      played
+    };
+  });
+
+  expect(result.burstMetrics).toMatchObject({
+    queueDepth: 3,
+    targetQueueDepth: 2,
+    underflows: 0
+  });
+  expect(result.burstDelay).toBe(0);
+  expect(result.played.at(-1)).toMatchObject({
+    atMs: 300,
+    tick: { id: 'burst-0' },
+    metrics: {
+      queueDepth: 2,
+      targetQueueDepth: 2
+    }
+  });
+  expect(result.afterFirstBurstReplay).toMatchObject({
+    queueDepth: 2,
+    targetQueueDepth: 2
+  });
+  expect(result.followUpDelay).toBeGreaterThan(0);
 });
