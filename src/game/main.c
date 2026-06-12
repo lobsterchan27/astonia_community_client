@@ -32,6 +32,10 @@
 #include "client/client.h"
 #include "modder/modder.h"
 
+#if defined(__EMSCRIPTEN__) && !defined(ASTONIA_NO_DESKTOP_MAIN)
+#define ASTONIA_NO_DESKTOP_MAIN
+#endif
+
 // Forward declarations
 void xlog(FILE *logfp, char *format, ...) __attribute__((format(printf, 2, 3)));
 void addlinesep(void);

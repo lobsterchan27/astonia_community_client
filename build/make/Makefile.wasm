@@ -14,6 +14,7 @@ HOST_CC ?= clang
 SOKOL_DIR := third_party/sokol
 WASM_PLATFORM_SRCS := \
 	src/wasm/sokol_webgpu_harness.c \
+	src/wasm/native_startup_adapter.c \
 	src/wasm/resource_fs_check.c \
 	src/wasm/astonia_smoke_observability.c \
 	src/wasm/astonia_net_wasm.c \
@@ -150,14 +151,14 @@ NATIVE_STARTUP_CFLAGS := \
 WASM_FLAGS := \
 	--preload-file res@/res \
 	$(foreach lib,$(WASM_JS_LIBS),--js-library $(lib)) \
-	--use-port=emdawnwebgpu \
 	--use-port=sdl3 \
 	--use-port=libpng \
+	--use-port=emdawnwebgpu \
 	-sENVIRONMENT=web \
 	-sMODULARIZE=1 \
 	-sEXPORT_ES6=1 \
 	-sEXPORT_NAME=createAstoniaClientModule \
-	-sEXPORTED_FUNCTIONS=_astonia_resource_fs_check,_astonia_resource_fs_expected_count,_astonia_smoke_login_done,_astonia_smoke_sockstate,_astonia_smoke_protocol_version,_astonia_smoke_tick,_astonia_smoke_queued_ticks,_astonia_smoke_queue_size,_astonia_wasm_native_state_check,_astonia_wasm_native_state_probe_sprite,_astonia_native_client_startup,_astonia_native_client_run,_astonia_native_client_shutdown,_main_loop_init,_main_loop_step,_main_loop_shutdown \
+	-sEXPORTED_FUNCTIONS=_astonia_resource_fs_check,_astonia_resource_fs_expected_count,_astonia_smoke_login_done,_astonia_smoke_sockstate,_astonia_smoke_protocol_version,_astonia_smoke_tick,_astonia_smoke_queued_ticks,_astonia_smoke_queue_size,_astonia_wasm_native_state_check,_astonia_wasm_native_state_probe_sprite,_astonia_native_client_startup,_astonia_native_client_run,_astonia_native_client_shutdown,_main_loop_init,_main_loop_step,_main_loop_shutdown,_astonia_native_startup_adapter_status,_astonia_native_startup_adapter_startup_result,_astonia_native_startup_adapter_loop_init_result,_astonia_native_startup_adapter_frame_count,_astonia_native_startup_adapter_step_count,_astonia_native_startup_adapter_shutdown_count,_astonia_native_startup_adapter_has_username,_astonia_native_startup_adapter_has_password,_astonia_native_startup_adapter_has_server_url,_astonia_native_startup_adapter_want_width,_astonia_native_startup_adapter_want_height,_astonia_native_startup_adapter_thread_count \
 	-sALLOW_MEMORY_GROWTH=1 \
 	-sMAXIMUM_MEMORY=1GB \
 	-sNO_EXIT_RUNTIME=1
@@ -165,13 +166,13 @@ WASM_FLAGS := \
 all: check-env $(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA)
 
 $(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA) &: $(WASM_SRCS) $(WASM_JS_LIBS) src/wasm/astonia_smoke_observability.h \
-		src/wasm/wasm_platform_shell.h src/wasm/zip.h src/wasm/SDL3_mixer/SDL_mixer.h \
+		src/wasm/native_startup_adapter.h src/wasm/wasm_platform_shell.h src/wasm/zip.h src/wasm/SDL3_mixer/SDL_mixer.h \
 		src/render_backend/render_backend.h src/render_backend/sokol_webgpu_backend.h src/sdl/sdl_state.h \
 		$(SOKOL_DIR)/sokol_app.h $(SOKOL_DIR)/sokol_gfx.h $(SOKOL_DIR)/sokol_glue.h $(SOKOL_DIR)/sokol_log.h \
 		$(RESOURCE_FILES)
 	@mkdir -p $(OUT_DIR)
 	$(EMCC) $(WASM_CFLAGS) $(WASM_SRCS) -o $(TARGET_JS) $(WASM_FLAGS)
-	@echo "Built Sokol WebGPU renderer harness: $(TARGET_JS)"
+	@echo "Built native startup adapter: $(TARGET_JS)"
 	@echo "Built native WASM module: $(TARGET_WASM)"
 	@echo "Packaged native resources for Emscripten FS: $(TARGET_DATA)"
 

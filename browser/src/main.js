@@ -159,6 +159,33 @@ function collectLaunchArgs(form) {
   ];
 }
 
+function nativeStartupDetail(module) {
+  if (typeof module?._astonia_native_startup_adapter_status !== 'function') {
+    return 'The real client owns the canvas.';
+  }
+
+  const statusNames = new Map([
+    [0, 'created'],
+    [1, 'starting'],
+    [2, 'running'],
+    [3, 'stopped'],
+    [4, 'startup failed'],
+    [5, 'loop init failed'],
+    [6, 'cleaned up']
+  ]);
+  const status = module._astonia_native_startup_adapter_status();
+  const startupResult =
+    typeof module._astonia_native_startup_adapter_startup_result === 'function'
+      ? module._astonia_native_startup_adapter_startup_result()
+      : null;
+  const loopResult =
+    typeof module._astonia_native_startup_adapter_loop_init_result === 'function'
+      ? module._astonia_native_startup_adapter_loop_init_result()
+      : null;
+
+  return `Native lifecycle ${statusNames.get(status) ?? status}; startup ${startupResult}; loop ${loopResult}.`;
+}
+
 async function startNativeClient(event) {
   event.preventDefault();
   if (launchOwner !== null) {
@@ -240,7 +267,7 @@ async function startNativeClient(event) {
 
     owner.module = module;
     window.astoniaNativeModule = module;
-    setModuleStatus('running', 'Native Module Running', 'The real client owns the canvas.');
+    setModuleStatus('running', 'Native Module Running', nativeStartupDetail(module));
   } catch (error) {
     if (!owner.aborted && launchOwner === owner) {
       launchOwner = null;

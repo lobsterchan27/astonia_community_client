@@ -22,7 +22,19 @@ export default function createAstoniaClientModule(config) {
   config.setStatus?.('Downloading native module');
   config.monitorRunDependencies?.(2);
   return new Promise((resolve) => {
-    window.resolveNativeLaunch = () => resolve({ launched: true });
+    window.resolveNativeLaunch = () =>
+      resolve({
+        launched: true,
+        _astonia_native_startup_adapter_status() {
+          return 2;
+        },
+        _astonia_native_startup_adapter_startup_result() {
+          return 0;
+        },
+        _astonia_native_startup_adapter_loop_init_result() {
+          return 0;
+        }
+      });
   });
 }
 `;
@@ -175,13 +187,16 @@ test('host reports WebGPU and native module status', async ({ page }) => {
   await expect(page.getByTestId('webgpu-status')).not.toContainText('Checking WebGPU');
   await expect(page.getByTestId('wasm-module-status')).not.toContainText('Checking Native Module');
 
-  const moduleText = await page.getByTestId('wasm-module-status').textContent();
-  expect(moduleText).toMatch(/(Build Required|Native Module Ready)/);
-  if (moduleText.includes('Build Required')) {
-    expect(moduleText).toContain('browser/dist/astonia-client.js');
-    expect(moduleText).toContain('browser/dist/astonia-client.wasm');
-    expect(moduleText).toContain('browser/dist/astonia-client.data');
-  }
+	const moduleText = await page.getByTestId('wasm-module-status').textContent();
+	expect(moduleText).toMatch(/(Build Required|Incomplete Native Artifacts|Native Module Ready)/);
+	if (moduleText.includes('Build Required')) {
+		expect(moduleText).toContain('browser/dist/astonia-client.js');
+		expect(moduleText).toContain('browser/dist/astonia-client.wasm');
+		expect(moduleText).toContain('browser/dist/astonia-client.data');
+	}
+	if (moduleText.includes('Incomplete Native Artifacts')) {
+		expect(moduleText).toContain('browser/dist/astonia-client.');
+	}
 
   expect(failures).toEqual([]);
 });
@@ -233,6 +248,7 @@ test('host launches one native module owner with canvas and CLI arguments', asyn
 
   await page.evaluate(() => window.resolveNativeLaunch());
   await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'running');
+  await expect(page.getByTestId('wasm-module-status')).toContainText('Native lifecycle running; startup 0; loop 0.');
   await expect(page.getByRole('button', { name: 'Launch' })).toBeDisabled();
 
   await page.evaluate(() => document.querySelector('[data-testid="wasm-launch-form"]').requestSubmit());
@@ -386,6 +402,80 @@ test('generated native module exports native lifecycle entry points', async ({ p
 	});
 
 	expect(missing).toEqual([]);
+	expect(failures).toEqual([]);
+});
+
+test('generated native module exposes native startup adapter probes', async ({ page }) => {
+	if (!existsSync(distModulePath)) {
+		test.skip(true, 'native WASM module has not been built');
+	}
+
+	const failures = collectBrowserFailures(page);
+	await page.goto('/');
+
+	const result = await page.evaluate(async () => {
+		const imported = await import(`/dist/astonia-client.js?t=${Date.now()}`);
+		const createModule = imported.default ?? imported.createAstoniaClientModule;
+		const module = await createModule({
+			noInitialRun: true,
+			canvas: document.querySelector('[data-testid="wasm-client-canvas"]'),
+			locateFile(path) {
+				return `/dist/${path}`;
+			}
+		});
+
+		const probes = [
+			'_astonia_native_startup_adapter_status',
+			'_astonia_native_startup_adapter_startup_result',
+			'_astonia_native_startup_adapter_loop_init_result',
+			'_astonia_native_startup_adapter_frame_count',
+			'_astonia_native_startup_adapter_step_count',
+			'_astonia_native_startup_adapter_shutdown_count',
+			'_astonia_native_startup_adapter_has_username',
+			'_astonia_native_startup_adapter_has_password',
+			'_astonia_native_startup_adapter_has_server_url',
+			'_astonia_native_startup_adapter_want_width',
+			'_astonia_native_startup_adapter_want_height',
+			'_astonia_native_startup_adapter_thread_count'
+		];
+		const missing = probes.filter((name) => typeof module[name] !== 'function');
+
+		return {
+			missing,
+			values: missing.length
+				? null
+				: {
+						status: module._astonia_native_startup_adapter_status(),
+						startupResult: module._astonia_native_startup_adapter_startup_result(),
+						loopInitResult: module._astonia_native_startup_adapter_loop_init_result(),
+						frameCount: module._astonia_native_startup_adapter_frame_count(),
+						stepCount: module._astonia_native_startup_adapter_step_count(),
+						shutdownCount: module._astonia_native_startup_adapter_shutdown_count(),
+						hasUsername: module._astonia_native_startup_adapter_has_username(),
+						hasPassword: module._astonia_native_startup_adapter_has_password(),
+						hasServerUrl: module._astonia_native_startup_adapter_has_server_url(),
+						wantWidth: module._astonia_native_startup_adapter_want_width(),
+						wantHeight: module._astonia_native_startup_adapter_want_height(),
+						threadCount: module._astonia_native_startup_adapter_thread_count()
+					}
+		};
+	});
+
+	expect(result.missing).toEqual([]);
+	expect(result.values).toEqual({
+		status: 0,
+		startupResult: -5,
+		loopInitResult: -5,
+		frameCount: 0,
+		stepCount: 0,
+		shutdownCount: 0,
+		hasUsername: 0,
+		hasPassword: 0,
+		hasServerUrl: 0,
+		wantWidth: 0,
+		wantHeight: 0,
+		threadCount: 0
+	});
 	expect(failures).toEqual([]);
 });
 
