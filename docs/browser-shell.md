@@ -1,8 +1,10 @@
 # Browser Shell
 
 The browser shell is a small standalone target under `browser/`. It serves a
-static page with a WebGPU capability probe; it does not connect to the Astonia
-protocol, gateway, replay data, or native renderer.
+live login view that connects through the WebSocket gateway, sends the native
+login byte sequence, decodes inbound ticks, replays protocol state, and renders
+a minimal world canvas from decoded assets. It also keeps the WebGPU capability
+probe used by renderer tests.
 
 ## Setup
 
@@ -48,9 +50,13 @@ cd browser
 npm test
 ```
 
-The smoke check starts the dev server, opens the page in Chromium, verifies that
-the shell loads without console or runtime errors, and waits for the WebGPU
-status to report either availability or a clear fallback.
+The smoke checks start the dev server, open the page in Chromium, verify that
+the shell loads without console or runtime errors, wait for the WebGPU status to
+report either availability or a clear fallback, and exercise the live login
+lifecycle against a fake gateway plus the committed Docker login fixture.
+
+For a live Docker server, gateway, and browser startup sequence, see
+`docs/browser-live-login.md`.
 
 ## Native Build And Test
 

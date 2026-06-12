@@ -45,6 +45,9 @@ If Docker publishes the game port on another host or port, keep `--listen` as
 the browser-facing WebSocket address and update only `--tcp-host` and
 `--tcp-port` to match the Docker mapping.
 
+See `docs/browser-live-login.md` for the full three-terminal live browser login
+flow: disposable Docker server, gateway, and browser dev server.
+
 ## Test
 
 ```bash
