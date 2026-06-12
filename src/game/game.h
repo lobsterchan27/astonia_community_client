@@ -6,6 +6,7 @@
 #include <SDL3/SDL_keycode.h>
 
 #include "astonia.h"
+#include "game/native_lifecycle.h"
 
 // Sprite alignment constants
 #define RENDER_ALIGN_OFFSET 0 // Use sprite's built-in offset (must be zero for bzero default)

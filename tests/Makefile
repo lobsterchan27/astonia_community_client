@@ -60,8 +60,9 @@ TEST_HASH_DIAG = $(BIN_DIR)/test_hash_distribution
 TEST_RENDER_PRIMS = $(BIN_DIR)/test_render_primitives
 TEST_SPRITE_CONFIG = $(BIN_DIR)/test_sprite_config
 TEST_RENDERER_BACKEND_CONTRACT = $(BIN_DIR)/test_renderer_backend_contract
+TEST_NATIVE_LIFECYCLE_API = $(BIN_DIR)/test_native_lifecycle_api.o
 
-all: $(TEST_RENDERER_BACKEND_CONTRACT) $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_CONFIG)
+all: $(TEST_RENDERER_BACKEND_CONTRACT) $(TEST_NATIVE_LIFECYCLE_API) $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_CONFIG)
 test: run
 
 $(TEST_SERIALIZED): test_texture_cache.c $(ALL_SRCS)
@@ -90,6 +91,10 @@ $(TEST_SPRITE_CONFIG): test_sprite_config.c $(SPRITE_CONFIG_SRCS)
 $(TEST_RENDERER_BACKEND_CONTRACT): test_renderer_backend_contract.c ../src/render_backend/render_backend.h
 	@mkdir -p $(BIN_DIR)
 	$(CC) -O2 -g -Wall -Wextra -Wpedantic -Werror -I../src $< -o $@
+
+$(TEST_NATIVE_LIFECYCLE_API): test_native_lifecycle_api.c ../src/game/native_lifecycle.h ../src/dll.h
+	@mkdir -p $(BIN_DIR)
+	$(CC) -O2 -g -Wall -Wextra -Wpedantic -Werror -I../src -c $< -o $@
 
 # Run serialized tests (single-threaded cache tests)
 test_serialized: $(TEST_SERIALIZED)
@@ -139,8 +144,15 @@ test_renderer_backend_contract: $(TEST_RENDERER_BACKEND_CONTRACT)
 	@echo "==============================================="
 	cd .. && ./bin/test_renderer_backend_contract
 
+test_native_lifecycle_api: $(TEST_NATIVE_LIFECYCLE_API)
+	@echo ""
+	@echo "==============================================="
+	@echo "Compiling native lifecycle API contract..."
+	@echo "==============================================="
+	@echo "Native lifecycle API compile check passed"
+
 # Run all tests in sequence
-run: test_renderer_backend_contract test_serialized test_concurrent test_hash_diag test_render_prims test_sprite_config
+run: test_renderer_backend_contract test_native_lifecycle_api test_serialized test_concurrent test_hash_diag test_render_prims test_sprite_config
 	@echo ""
 	@echo "==============================================="
 	@echo "All tests passed!"
@@ -148,6 +160,6 @@ run: test_renderer_backend_contract test_serialized test_concurrent test_hash_di
 
 clean:
 	rm -f $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_CONFIG) \
-		$(TEST_RENDERER_BACKEND_CONTRACT) *.o
+		$(TEST_RENDERER_BACKEND_CONTRACT) $(TEST_NATIVE_LIFECYCLE_API) *.o
 
-.PHONY: all clean run test_serialized test_concurrent test_render_prims test_sprite_config test_renderer_backend_contract
+.PHONY: all clean run test_serialized test_concurrent test_render_prims test_sprite_config test_renderer_backend_contract test_native_lifecycle_api

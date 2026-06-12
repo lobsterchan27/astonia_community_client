@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
@@ -590,8 +591,20 @@ static void set_v35_values(void)
 	set_v35_skilltab();
 }
 
-// main
-int main(int argc, char *argv[])
+enum astonia_native_lifecycle_phase {
+	ASTONIA_NATIVE_LIFECYCLE_LOGGING = 1u << 0,
+	ASTONIA_NATIVE_LIFECYCLE_AMOD = 1u << 1,
+	ASTONIA_NATIVE_LIFECYCLE_SHAREDMEM = 1u << 2,
+	ASTONIA_NATIVE_LIFECYCLE_SDL = 1u << 3,
+	ASTONIA_NATIVE_LIFECYCLE_RENDER = 1u << 4,
+	ASTONIA_NATIVE_LIFECYCLE_SOUND = 1u << 5,
+	ASTONIA_NATIVE_LIFECYCLE_MAIN = 1u << 6,
+	ASTONIA_NATIVE_LIFECYCLE_STARTED = 1u << 7
+};
+
+static unsigned int astonia_native_lifecycle_state = 0;
+
+DLL_EXPORT int astonia_native_client_startup(int argc, char **argv)
 {
 #if USE_MIMALLOC
 	// Configure SDL to use mimalloc for all its internal allocations
@@ -605,8 +618,12 @@ int main(int argc, char *argv[])
 	int ret;
 	char buf[80];
 
+	if (astonia_native_lifecycle_state) {
+		return ASTONIA_NATIVE_CLIENT_ALREADY_STARTED;
+	}
+
 	if ((ret = parse_args(argc, argv)) != 0) {
-		return -1;
+		return ASTONIA_NATIVE_CLIENT_ARGS_FAILED;
 	}
 
 	if (sv_ver == 35) {
@@ -614,6 +631,7 @@ int main(int argc, char *argv[])
 	}
 
 	init_logging();
+	astonia_native_lifecycle_state |= ASTONIA_NATIVE_LIFECYCLE_LOGGING;
 
 #ifdef ENABLE_CRASH_HANDLER
 	register_crash_handler();
@@ -621,10 +639,12 @@ int main(int argc, char *argv[])
 
 	teleport_init();
 	amod_init();
+	astonia_native_lifecycle_state |= ASTONIA_NATIVE_LIFECYCLE_AMOD;
 	sprite_config_init();
 	amod_sprite_config();
 #ifdef ENABLE_SHAREDMEM
 	sharedmem_init();
+	astonia_native_lifecycle_state |= ASTONIA_NATIVE_LIFECYCLE_SHAREDMEM;
 #endif
 
 	load_options();
@@ -632,7 +652,7 @@ int main(int argc, char *argv[])
 	// set some stuff
 	if (!*username || !*password || !*server_url) {
 		display_usage();
-		return 0;
+		return ASTONIA_NATIVE_CLIENT_SHOW_USAGE;
 	}
 
 	xlog(errorfp, "Client started with -h%d -w%d -o%" PRIu64, want_height, want_width, game_options);
@@ -658,49 +678,118 @@ int main(int argc, char *argv[])
 
 	sprintf(buf, "Astonia 3 v%d.%d.%d", (VERSION >> 16) & 255, (VERSION >> 8) & 255, (VERSION) & 255);
 	if (!sdl_init(want_width, want_height, buf, want_monitor)) {
-		render_exit();
-		return -1;
+		return ASTONIA_NATIVE_CLIENT_SDL_FAILED;
 	}
+	astonia_native_lifecycle_state |= ASTONIA_NATIVE_LIFECYCLE_SDL;
 
-	render_init();
-	init_sound();
+	if (render_init() != 0) {
+		return ASTONIA_NATIVE_CLIENT_RENDER_FAILED;
+	}
+	astonia_native_lifecycle_state |= ASTONIA_NATIVE_LIFECYCLE_RENDER;
+	if (init_sound() == 0) {
+		astonia_native_lifecycle_state |= ASTONIA_NATIVE_LIFECYCLE_SOUND;
+	}
 
 	if (game_options & GO_LARGE) {
 		namesize = 0;
 		render_set_textfont(1);
 	}
 
-	main_init();
+	if (main_init() != 0) {
+		return ASTONIA_NATIVE_CLIENT_MAIN_INIT_FAILED;
+	}
+	astonia_native_lifecycle_state |= ASTONIA_NATIVE_LIFECYCLE_MAIN;
 	help_init();
 	update_user_keys();
 
+	astonia_native_lifecycle_state |= ASTONIA_NATIVE_LIFECYCLE_STARTED;
+
+	return ASTONIA_NATIVE_CLIENT_OK;
+}
+
+DLL_EXPORT int astonia_native_client_run(void)
+{
+	if (!(astonia_native_lifecycle_state & ASTONIA_NATIVE_LIFECYCLE_STARTED)) {
+		return ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED;
+	}
+
 	main_loop();
 
-#ifdef ENABLE_SHAREDMEM
-	sharedmem_exit();
-#endif
-	amod_exit();
-	main_exit();
-	sound_exit();
-	render_exit();
-	sdl_exit();
+	return ASTONIA_NATIVE_CLIENT_OK;
+}
 
-	list_mem();
+DLL_EXPORT void astonia_native_client_shutdown(void)
+{
+	unsigned int state = astonia_native_lifecycle_state;
+	int started;
 
-	if (panic_reached) {
-		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "recursion panic", panic_reached_str, NULL);
+	if (!state) {
+		return;
 	}
-	if (xmemcheck_failed) {
-		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "memory panic", memcheck_failed_str, NULL);
+	started = (state & ASTONIA_NATIVE_LIFECYCLE_STARTED) != 0;
+
+	main_loop_shutdown();
+
+#ifdef ENABLE_SHAREDMEM
+	if (state & ASTONIA_NATIVE_LIFECYCLE_SHAREDMEM) {
+		sharedmem_exit();
+	}
+#endif
+	if (state & ASTONIA_NATIVE_LIFECYCLE_AMOD) {
+		amod_exit();
+	}
+	if (state & ASTONIA_NATIVE_LIFECYCLE_MAIN) {
+		main_exit();
+	}
+	if (state & ASTONIA_NATIVE_LIFECYCLE_SOUND) {
+		sound_exit();
+	}
+	if (state & ASTONIA_NATIVE_LIFECYCLE_RENDER) {
+		render_exit();
+	}
+	if (state & ASTONIA_NATIVE_LIFECYCLE_SDL) {
+		sdl_exit();
+	}
+
+	if (started) {
+		list_mem();
+
+		if (panic_reached) {
+			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "recursion panic", panic_reached_str, NULL);
+		}
+		if (xmemcheck_failed) {
+			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "memory panic", memcheck_failed_str, NULL);
+		}
 	}
 
 	if (localdata) {
 		SDL_free(localdata);
+		localdata = NULL;
 	}
 
-	xlog(errorfp, "Clean client shutdown. Thank you for playing!");
-	if (errorfp != stderr) {
+	if (started) {
+		xlog(errorfp, "Clean client shutdown. Thank you for playing!");
+	}
+	if ((state & ASTONIA_NATIVE_LIFECYCLE_LOGGING) && errorfp != stderr) {
 		fclose(errorfp);
 	}
-	return 0;
+	errorfp = NULL;
+	astonia_native_lifecycle_state = 0;
 }
+
+#ifndef ASTONIA_NO_DESKTOP_MAIN
+// main
+int main(int argc, char *argv[])
+{
+	int ret = astonia_native_client_startup(argc, argv);
+
+	if (ret == ASTONIA_NATIVE_CLIENT_OK) {
+		ret = astonia_native_client_run();
+		astonia_native_client_shutdown();
+		return ret == ASTONIA_NATIVE_CLIENT_OK ? 0 : -1;
+	}
+
+	astonia_native_client_shutdown();
+	return ret == ASTONIA_NATIVE_CLIENT_SHOW_USAGE ? 0 : -1;
+}
+#endif
