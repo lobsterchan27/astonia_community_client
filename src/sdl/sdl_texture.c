@@ -484,6 +484,11 @@ static int tex_entry_build_text(int cache_index, const struct tex_request *r, in
 
 	sdlt[cache_index].tex =
 	    sdl_maketext(r->text, (struct renderfont *)r->text_font, (uint32_t)r->text_color, r->text_flags);
+	if (!sdlt[cache_index].tex) {
+		sdlt[cache_index].xres = 0;
+		sdlt[cache_index].yres = 0;
+		return STX_NONE;
+	}
 	sdlt[cache_index].text_color = (uint32_t)r->text_color;
 	sdlt[cache_index].text_flags = (uint16_t)r->text_flags;
 	sdlt[cache_index].text_font = r->text_font;
@@ -498,23 +503,15 @@ static int tex_entry_build_text(int cache_index, const struct tex_request *r, in
 #else
 	sdlt[cache_index].text = xstrdup(r->text, MEM_TEMP7);
 #endif
-	if (sdlt[cache_index].tex) {
 #ifdef SDL_USE_RENDER_BACKEND_TEXTURES
-		sdl_backend_get_texture_size(sdlt[cache_index].tex, &w, &h);
+	sdl_backend_get_texture_size(sdlt[cache_index].tex, &w, &h);
 #else
-		SDL_GetTextureSize(sdlt[cache_index].tex, &w, &h);
+	SDL_GetTextureSize(sdlt[cache_index].tex, &w, &h);
 #endif
-		sdlt[cache_index].xres = (uint16_t)w;
-		sdlt[cache_index].yres = (uint16_t)h;
-		// Set flags ONLY if tex creation succeeded
-		uint16_t *flags_ptr = (uint16_t *)&sdlt[cache_index].flags;
-		__atomic_store_n(flags_ptr, SF_USED | SF_TEXT | SF_DIDALLOC | SF_DIDMAKE | SF_DIDTEX, __ATOMIC_RELEASE);
-	} else {
-		sdlt[cache_index].xres = sdlt[cache_index].yres = 0;
-		// Text creation failed - don't set SF_DIDTEX
-		uint16_t *flags_ptr = (uint16_t *)&sdlt[cache_index].flags;
-		__atomic_store_n(flags_ptr, SF_USED | SF_TEXT | SF_DIDALLOC | SF_DIDMAKE, __ATOMIC_RELEASE);
-	}
+	sdlt[cache_index].xres = (uint16_t)w;
+	sdlt[cache_index].yres = (uint16_t)h;
+	uint16_t *flags_ptr = (uint16_t *)&sdlt[cache_index].flags;
+	__atomic_store_n(flags_ptr, SF_USED | SF_TEXT | SF_DIDALLOC | SF_DIDMAKE | SF_DIDTEX, __ATOMIC_RELEASE);
 
 	// Link into hash chain
 	ntx = sdlt_cache[hash];

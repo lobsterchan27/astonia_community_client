@@ -189,8 +189,11 @@ SDL_Texture *sdl_maketext(const char *text, struct renderfont *font, uint32_t co
 
 	start = SDL_GetTicks();
 #ifdef SDL_USE_RENDER_BACKEND_TEXTURES
-	(void)otext;
-	SDL_Texture *texture = NULL;
+	SDL_Texture *texture =
+	    sdl_backend_create_texture_from_argb8888(sizex, sizey, pixel, (size_t)sizex * sizeof(uint32_t));
+	if (!texture) {
+		warn("Renderer texture upload failed: maketext (%s)", otext);
+	}
 #else
 	SDL_Texture *texture = SDL_CreateTexture(sdlren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, sizex, sizey);
 	if (texture) {
@@ -227,16 +230,19 @@ int sdl_drawtext(int sx, int sy, unsigned short int color, int flags, const char
 	b = B16TO32(color);
 	a = 255;
 
+	for (dx = 0, c = text; *c; c++) {
+		dx += font[(unsigned char)*c].dim;
+	}
+
 	if (flags & RENDER_TEXT_NOCACHE) {
 		tex = sdl_maketext(text, font, (uint32_t)IRGBA(r, g, b, a), flags);
 	} else {
 		cache_index = sdl_tx_load(
 		    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, text, (int)IRGBA(r, g, b, a), flags, font, 0, 0);
+		if (cache_index == STX_NONE) {
+			return sx + dx;
+		}
 		tex = sdlt[cache_index].tex;
-	}
-
-	for (dx = 0, c = text; *c; c++) {
-		dx += font[(unsigned char)*c].dim;
 	}
 
 	if (tex) {
@@ -249,7 +255,11 @@ int sdl_drawtext(int sx, int sy, unsigned short int color, int flags, const char
 		sdl_blit_tex(tex, sx, sy, clipsx, clipsy, clipex, clipey, x_offset, y_offset);
 
 		if (flags & RENDER_TEXT_NOCACHE) {
+#ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+			sdl_backend_destroy_texture(tex);
+#else
 			SDL_DestroyTexture(tex);
+#endif
 		}
 	}
 
