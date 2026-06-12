@@ -52,6 +52,26 @@ export default function createAstoniaClientModule(config) {
 }
 `;
 
+const lateLoadingStatusModuleSource = `
+export default function createAstoniaClientModule(config) {
+  config.setStatus?.('Running...');
+  return Promise.resolve({
+    _astonia_native_startup_adapter_status() {
+      return 2;
+    },
+    _astonia_native_startup_adapter_startup_result() {
+      return 0;
+    },
+    _astonia_native_startup_adapter_loop_init_result() {
+      return 0;
+    }
+  }).then((module) => {
+    setTimeout(() => config.setStatus?.('Preparing native runtime.'), 0);
+    return module;
+  });
+}
+`;
+
 function collectBrowserFailures(page) {
   const failures = [];
 
@@ -253,6 +273,66 @@ test('host launches one native module owner with canvas and CLI arguments', asyn
 
   await page.evaluate(() => document.querySelector('[data-testid="wasm-launch-form"]').requestSubmit());
   expect(await page.evaluate(() => window.nativeLaunchCalls.length)).toBe(1);
+});
+
+test('host records structured launch probe events with redacted credentials', async ({ page }) => {
+  await installMockWebGpu(page);
+  await routeNativeArtifacts(page);
+
+  await page.goto('/?astonia_probe=1');
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'ready');
+
+  await page.locator('input[name="password"]').fill('ProbeSecret');
+  await page.getByRole('button', { name: 'Launch' }).click();
+
+  await page.waitForFunction(() =>
+    window.astoniaWasmLaunchProbe?.events?.some((event) => event.stage === 'callback:monitorRunDependencies')
+  );
+
+  await page.evaluate(() => window.resolveNativeLaunch());
+  await page.waitForFunction(() =>
+    window.astoniaWasmLaunchProbe?.events?.some((event) => event.stage === 'running')
+  );
+
+  const probe = await page.evaluate(() => ({
+    enabled: window.astoniaWasmLaunchProbe.enabled,
+    events: window.astoniaWasmLaunchProbe.events
+  }));
+  const stages = probe.events.map((event) => event.stage);
+
+  expect(probe.enabled).toBe(true);
+  expect(stages).toEqual(
+    expect.arrayContaining([
+      'submit',
+      'owner-created',
+      'import-start',
+      'import-resolved',
+      'create-module-start',
+      'callback:monitorRunDependencies',
+      'create-module-resolved',
+      'running',
+      'finally'
+    ])
+  );
+  expect(JSON.stringify(probe.events)).not.toContain('ProbeSecret');
+  expect(JSON.stringify(probe.events)).toContain('<redacted>');
+});
+
+test('host keeps running state when the module emits a stale loading status after resolve', async ({ page }) => {
+  await installMockWebGpu(page);
+  await routeNativeArtifacts(page, { moduleSource: lateLoadingStatusModuleSource });
+
+  await page.goto('/?astonia_probe=1');
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'ready');
+
+  await page.getByRole('button', { name: 'Launch' }).click();
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'running');
+  await page.waitForFunction(() =>
+    window.astoniaWasmLaunchProbe?.events?.some((event) => event.stage === 'loading-detail-ignored')
+  );
+
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'running');
+  await expect(page.getByTestId('wasm-module-status')).toContainText('Native lifecycle running; startup 0; loop 0.');
 });
 
 test('host preserves native abort reason instead of replacing it with factory failure', async ({ page }) => {
