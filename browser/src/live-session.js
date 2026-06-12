@@ -3,6 +3,13 @@ import { AstoniaProtocolStateReplay } from './protocol/state-replay.js';
 import { AstoniaTickStreamDecoder } from './protocol/tick-stream-decoder.js';
 import { buildAstoniaLoginFrames } from './protocol/login.js';
 import { encodeAstoniaMoveCommand } from './protocol/move-command.js';
+import {
+  createFirstStepMovementPrediction,
+  createPredictedMovementSnapshot,
+  initialMovementPredictionState,
+  normalizeMovementPredictionOptions,
+  reconcileMovementPrediction
+} from './movement-prediction.js';
 import { AdaptiveTickJitterBuffer } from './tick-jitter-buffer.js';
 
 const DEFAULT_GATEWAY_URL = 'ws://127.0.0.1:8787';
@@ -26,6 +33,7 @@ export class AstoniaLiveSession extends EventTarget {
   #loginOptions;
   #baseGatewayUrl;
   #areaRetargetAttempt;
+  #movementPredictionOptions;
 
   constructor(options = {}) {
     super();
@@ -44,7 +52,8 @@ export class AstoniaLiveSession extends EventTarget {
     this.#replayTimerDueAt = null;
     this.#socket = null;
     this.#messageQueue = Promise.resolve();
-    this.#state = initialState();
+    this.#movementPredictionOptions = normalizeMovementPredictionOptions(options.movementPrediction);
+    this.#state = initialState(this.#movementPredictionOptions);
     this.#loginOptions = null;
     this.#baseGatewayUrl = DEFAULT_GATEWAY_URL;
     this.#areaRetargetAttempt = 0;
@@ -59,6 +68,10 @@ export class AstoniaLiveSession extends EventTarget {
       this.close();
     }
 
+    if (Object.hasOwn(options, 'movementPrediction')) {
+      this.#movementPredictionOptions = normalizeMovementPredictionOptions(options.movementPrediction);
+    }
+
     const gatewayUrl = options.gatewayUrl || DEFAULT_GATEWAY_URL;
     this.#loginOptions = { ...options, gatewayUrl };
     this.#baseGatewayUrl = gatewayUrl;
@@ -69,7 +82,7 @@ export class AstoniaLiveSession extends EventTarget {
     this.#clearReplayTimer();
     this.#messageQueue = Promise.resolve();
     this.#state = {
-      ...initialState(),
+      ...initialState(this.#movementPredictionOptions),
       latencyMetrics: this.#tickBuffer.metrics(),
       gatewayUrl,
       status: 'connecting',
@@ -135,6 +148,7 @@ export class AstoniaLiveSession extends EventTarget {
       }
 
       this.#clearReplayTimer();
+      this.#clearMovementPrediction('socket-closed');
       if (this.#state.status !== 'error') {
         this.#state.status = this.#state.decodedTicks > 0 ? 'closed' : 'closed-before-ticks';
         this.#state.statusDetail = 'Gateway WebSocket closed.';
@@ -152,9 +166,32 @@ export class AstoniaLiveSession extends EventTarget {
 
   close() {
     this.#clearReplayTimer();
+    const predictionCleared = this.#clearMovementPrediction('explicit-close');
     const socket = this.#socket;
     this.#socket = null;
     socket?.close();
+    if (predictionCleared) {
+      this.#emitChange();
+    }
+  }
+
+  setMovementPredictionEnabled(enabled) {
+    const nextOptions = {
+      ...this.#movementPredictionOptions,
+      enabled: Boolean(enabled)
+    };
+    if (nextOptions.enabled === this.#movementPredictionOptions.enabled) {
+      return;
+    }
+
+    this.#movementPredictionOptions = nextOptions;
+    this.#state.movementPrediction = {
+      ...initialMovementPredictionState(this.#movementPredictionOptions),
+      status: nextOptions.enabled ? 'idle' : 'disabled',
+      reason: nextOptions.enabled ? null : 'disabled'
+    };
+    this.#refreshDisplaySnapshot();
+    this.#emitChange();
   }
 
   recordRenderTiming(durationMs) {
@@ -182,11 +219,27 @@ export class AstoniaLiveSession extends EventTarget {
       return false;
     }
 
-    this.#socket.send(frame);
+    let sentAtMs = null;
+    try {
+      this.#socket.send(frame);
+      sentAtMs = this.#now();
+    } catch (error) {
+      commandState.status = 'failed';
+      commandState.reason = error instanceof Error ? error.message : String(error);
+      this.#state.lastMoveCommand = commandState;
+      this.#emitChange();
+      return false;
+    }
+
     this.#state.outboundFrames += 1;
     this.#state.outboundBytes += frame.byteLength;
     commandState.status = 'sent';
     this.#state.lastMoveCommand = commandState;
+    this.#startMovementPrediction(target, {
+      sentAtMs,
+      sentAfterDecodedTicks: commandState.sentAfterDecodedTicks,
+      outboundFrame: commandState.outboundFrame
+    });
     this.#state.statusDetail = `Sent CL_MOVE to ${target.x},${target.y}; waiting for server-authoritative ticks.`;
     this.#emitChange();
     return true;
@@ -275,7 +328,8 @@ export class AstoniaLiveSession extends EventTarget {
       }
 
       this.#state.snapshot = replay.snapshot();
-      this.#state.renderList = createAstoniaRenderList(this.#state.snapshot);
+      this.#reconcileMovementPrediction();
+      this.#refreshDisplaySnapshot();
       this.#state.lastReceivedTick = {
         decodedTicks: this.#state.decodedTicks,
         currentTick: this.#state.snapshot.currentTick ?? null,
@@ -286,8 +340,17 @@ export class AstoniaLiveSession extends EventTarget {
       this.#state.lastVisibleUpdate = {
         decodedTicks: this.#state.decodedTicks,
         currentTick: this.#state.snapshot.currentTick ?? null,
-        playerPosition: clonePoint(this.#state.snapshot.player?.position),
-        updateMs: this.#state.latencyMetrics.updateMs
+        playerPosition: clonePoint(this.#state.displaySnapshot?.player?.position),
+        authoritativePlayerPosition: clonePoint(this.#state.snapshot.player?.position),
+        source: this.#state.movementPrediction?.pending ? 'prediction' : 'authoritative',
+        updateMs: this.#state.latencyMetrics.updateMs,
+        visualMs: null,
+        prediction: this.#state.movementPrediction?.pending
+          ? {
+              id: this.#state.movementPrediction.pending.id,
+              status: this.#state.movementPrediction.status
+            }
+          : null
       };
       this.#state.status = this.#state.snapshot.login.done ? 'live' : 'receiving';
       this.#state.statusDetail = `Replayed buffered tick at ${this.#state.latencyMetrics.queueDepth}/${this.#state.latencyMetrics.targetQueueDepth} queued tick(s).`;
@@ -323,9 +386,11 @@ export class AstoniaLiveSession extends EventTarget {
       lastRawTickBytes: 0,
       snapshot: null,
       renderList: null,
+      displaySnapshot: null,
       lastReceivedTick: null,
       lastVisibleUpdate: null,
       latencyMetrics: nextTickBuffer.metrics(),
+      movementPrediction: initialMovementPredictionState(this.#movementPredictionOptions),
       areaRetarget: {
         status: 'connecting',
         attempt: this.#areaRetargetAttempt,
@@ -384,6 +449,7 @@ export class AstoniaLiveSession extends EventTarget {
 
     this.#state.status = 'error';
     this.#state.statusDetail = error instanceof Error ? error.message : String(error);
+    this.#clearMovementPrediction('error');
     if (this.#state.areaRetarget?.status === 'connecting') {
       this.#state.areaRetarget = {
         ...this.#state.areaRetarget,
@@ -402,12 +468,144 @@ export class AstoniaLiveSession extends EventTarget {
     return this.#isCurrentSocket(socket) && socket.readyState === 1;
   }
 
+  #startMovementPrediction(target, metadata) {
+    const predictionState = initialMovementPredictionState(this.#movementPredictionOptions);
+    if (!this.#movementPredictionOptions.enabled) {
+      this.#state.movementPrediction = {
+        ...predictionState,
+        status: 'disabled',
+        reason: 'disabled'
+      };
+      this.#refreshDisplaySnapshot();
+      return;
+    }
+
+    const visualAtMs = this.#now();
+    const prediction = createFirstStepMovementPrediction(this.#state.snapshot, target, {
+      ...metadata,
+      id: `move:${metadata.outboundFrame}`,
+      visualAtMs,
+      confirmationTickWindow: this.#movementPredictionOptions.confirmationTickWindow
+    });
+
+    if (prediction.status !== 'pending') {
+      this.#state.movementPrediction = {
+        ...predictionState,
+        status: 'skipped',
+        reason: prediction.reason,
+        pending: null,
+        lastPredictedUpdate: null,
+        lastAuthoritativeReconciliation: prediction
+      };
+      this.#refreshDisplaySnapshot();
+      return;
+    }
+
+    this.#state.movementPrediction = {
+      ...predictionState,
+      status: 'pending',
+      reason: null,
+      pending: prediction,
+      lastPredictedUpdate: {
+        id: prediction.id,
+        target: clonePoint(prediction.target),
+        originalPosition: clonePoint(prediction.originalPosition),
+        predictedPosition: clonePoint(prediction.predictedPosition),
+        decodedTicks: this.#state.decodedTicks,
+        currentTick: this.#state.snapshot?.currentTick ?? null,
+        visualMs: prediction.visualMs,
+        outboundFrame: prediction.outboundFrame
+      },
+      lastAuthoritativeReconciliation: null
+    };
+    this.#refreshDisplaySnapshot();
+    this.#state.lastVisibleUpdate = {
+      decodedTicks: this.#state.decodedTicks,
+      currentTick: this.#state.snapshot?.currentTick ?? null,
+      playerPosition: clonePoint(this.#state.displaySnapshot?.player?.position),
+      authoritativePlayerPosition: clonePoint(this.#state.snapshot?.player?.position),
+      source: 'prediction',
+      updateMs: null,
+      visualMs: prediction.visualMs,
+      prediction: {
+        id: prediction.id,
+        status: 'pending'
+      }
+    };
+  }
+
+  #reconcileMovementPrediction() {
+    const pending = this.#state.movementPrediction?.pending;
+    if (!pending) {
+      return;
+    }
+
+    const result = reconcileMovementPrediction(pending, this.#state.snapshot, {
+      decodedTicks: this.#state.decodedTicks,
+      nowMs: this.#now()
+    });
+    if (!result) {
+      return;
+    }
+
+    this.#state.movementPrediction = {
+      ...this.#state.movementPrediction,
+      status: result.status,
+      reason: result.reason,
+      pending: result.status === 'pending' ? pending : null,
+      lastAuthoritativeReconciliation: result
+    };
+  }
+
+  #refreshDisplaySnapshot() {
+    const snapshot = this.#state.snapshot;
+    if (!snapshot) {
+      this.#state.displaySnapshot = null;
+      this.#state.renderList = null;
+      return;
+    }
+
+    this.#state.displaySnapshot = this.#state.movementPrediction?.pending
+      ? createPredictedMovementSnapshot(snapshot, this.#state.movementPrediction.pending)
+      : snapshot;
+    this.#state.renderList = createAstoniaRenderList(this.#state.displaySnapshot);
+  }
+
+  #clearMovementPrediction(reason) {
+    const state = this.#state.movementPrediction;
+    if (!state?.pending) {
+      return false;
+    }
+
+    this.#state.movementPrediction = {
+      ...state,
+      status: 'cleared',
+      reason,
+      pending: null,
+      lastAuthoritativeReconciliation: {
+        predictionId: state.pending.id,
+        status: 'cleared',
+        reason,
+        target: clonePoint(state.pending.target),
+        originalPosition: clonePoint(state.pending.originalPosition),
+        predictedPosition: clonePoint(state.pending.predictedPosition),
+        authoritativePosition: clonePoint(this.#state.snapshot?.player?.position),
+        decodedTicks: this.#state.decodedTicks,
+        currentTick: this.#state.snapshot?.currentTick ?? null,
+        confirmationTicks: Math.max(0, this.#state.decodedTicks - state.pending.sentAfterDecodedTicks),
+        confirmationMs: null
+      }
+    };
+    this.#refreshDisplaySnapshot();
+    return true;
+  }
+
   #emitChange() {
     this.dispatchEvent(new CustomEvent('change', { detail: this.state }));
   }
 }
 
-function initialState() {
+function initialState(movementPredictionOptions = normalizeMovementPredictionOptions()) {
   const latencyMetrics = new AdaptiveTickJitterBuffer().metrics();
   return {
     status: 'idle',
@@ -420,11 +618,13 @@ function initialState() {
     decodedTicks: 0,
     lastRawTickBytes: 0,
     snapshot: null,
+    displaySnapshot: null,
     renderList: null,
     lastMoveCommand: null,
     lastReceivedTick: null,
     lastVisibleUpdate: null,
     latencyMetrics,
+    movementPrediction: initialMovementPredictionState(movementPredictionOptions),
     areaRetarget: null
   };
 }
@@ -433,11 +633,13 @@ function cloneState(state) {
   return {
     ...state,
     snapshot: state.snapshot,
+    displaySnapshot: state.displaySnapshot,
     renderList: state.renderList,
     lastMoveCommand: state.lastMoveCommand ? cloneDebugObject(state.lastMoveCommand) : null,
     lastReceivedTick: state.lastReceivedTick ? cloneDebugObject(state.lastReceivedTick) : null,
     lastVisibleUpdate: state.lastVisibleUpdate ? cloneDebugObject(state.lastVisibleUpdate) : null,
     latencyMetrics: state.latencyMetrics ? cloneDebugObject(state.latencyMetrics) : null,
+    movementPrediction: state.movementPrediction ? cloneDebugObject(state.movementPrediction) : null,
     areaRetarget: state.areaRetarget ? cloneDebugObject(state.areaRetarget) : null
   };
 }

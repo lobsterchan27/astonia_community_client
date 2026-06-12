@@ -26,6 +26,10 @@
             <span>Password</span>
             <input name="password" type="password" autocomplete="current-password" value="fixturecapture" />
           </label>
+          <label class="checkbox-field">
+            <input name="movementPrediction" type="checkbox" data-testid="live-movement-prediction-toggle" checked />
+            <span>Predict</span>
+          </label>
           <button type="submit">Connect</button>
         </form>
 
@@ -120,6 +124,10 @@
             <div>
               <dt>Move</dt>
               <dd data-testid="live-last-move-command">-</dd>
+            </div>
+            <div>
+              <dt>Prediction</dt>
+              <dd data-testid="live-movement-prediction">enabled</dd>
             </div>
             <div>
               <dt>Area</dt>

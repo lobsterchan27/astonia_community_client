@@ -67,9 +67,12 @@ The live status should move through `Connecting`, `Login Sent`, and then
 `Live` after a successful login tick. The debug panel shows inbound/outbound
 frames and bytes, decoded tick count, current server tick, protocol version,
 player name and position, visible world counts, modeled/skipped command counts,
-and the latest area retarget attempt/result. The canvas renders the visible
-world using decoded sprites where the loaded archives contain them and colored
-fallbacks otherwise.
+the latest first-step movement prediction status, and the latest area retarget
+attempt/result. The `Predict` checkbox enables visual-only first-step movement
+prediction after click-to-move; use `?prediction=0` or clear the checkbox to
+compare against fully server-authoritative visuals. The canvas renders the
+visible world using decoded sprites where the loaded archives contain them and
+colored fallbacks otherwise.
 
 ## Automated Smoke
 

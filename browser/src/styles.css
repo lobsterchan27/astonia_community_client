@@ -68,7 +68,7 @@ h1 {
 
 @media (min-width: 860px) {
   .login-bar {
-    grid-template-columns: 1.35fr 0.8fr 0.8fr auto;
+    grid-template-columns: 1.35fr 0.8fr 0.8fr auto auto;
     align-items: end;
   }
 }
@@ -95,6 +95,22 @@ h1 {
   color: #f5f1e8;
   font: inherit;
   padding: 11px 12px;
+}
+
+.login-bar .checkbox-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  border: 1px solid rgba(245, 241, 232, 0.18);
+  border-radius: 6px;
+  background: #202529;
+  padding: 0 12px;
+}
+
+.login-bar .checkbox-field input {
+  width: auto;
+  accent-color: #d6ad68;
 }
 
 .login-bar button {

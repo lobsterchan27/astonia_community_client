@@ -7,6 +7,7 @@ const statusCard = document.querySelector('[data-testid="webgpu-status"]');
 const statusTitle = document.querySelector('[data-webgpu-title]');
 const statusDetail = document.querySelector('[data-webgpu-detail]');
 const liveForm = document.querySelector('[data-testid="live-login-form"]');
+const movementPredictionToggle = document.querySelector('[data-testid="live-movement-prediction-toggle"]');
 const liveStatusCard = document.querySelector('[data-testid="live-status"]');
 const liveStatusTitle = document.querySelector('[data-testid="live-connection-status"]');
 const liveStatusDetail = document.querySelector('[data-live-detail]');
@@ -26,12 +27,18 @@ const latencyArrival = document.querySelector('[data-testid="live-latency-arriva
 const latencyTimings = document.querySelector('[data-testid="live-latency-timings"]');
 const bufferTargetChange = document.querySelector('[data-testid="live-buffer-target-change"]');
 const lastMoveCommand = document.querySelector('[data-testid="live-last-move-command"]');
+const movementPrediction = document.querySelector('[data-testid="live-movement-prediction"]');
 const areaRetarget = document.querySelector('[data-testid="live-area-retarget"]');
 const lastReceivedTick = document.querySelector('[data-testid="live-last-received-tick"]');
 const lastVisibleUpdate = document.querySelector('[data-testid="live-last-visible-update"]');
 const messageLog = document.querySelector('[data-testid="live-message-log"]');
 
-const liveSession = new AstoniaLiveSession();
+const urlParams = new URLSearchParams(window.location.search);
+const liveSession = new AstoniaLiveSession({
+  movementPrediction: {
+    enabled: movementPredictionEnabledFromParams(urlParams)
+  }
+});
 let spriteAssetsPromise = null;
 let renderSerial = 0;
 
@@ -90,6 +97,7 @@ liveSession.addEventListener('change', (event) => {
 liveForm.addEventListener('submit', (event) => {
   event.preventDefault();
   const formData = new FormData(liveForm);
+  liveSession.setMovementPredictionEnabled(movementPredictionToggle.checked);
   liveSession.connect({
     gatewayUrl: String(formData.get('gateway') ?? ''),
     username: String(formData.get('username') ?? ''),
@@ -109,9 +117,13 @@ worldCanvas.addEventListener('click', (event) => {
   liveSession.moveToTile(target.world);
 });
 
+movementPredictionToggle.addEventListener('change', () => {
+  liveSession.setMovementPredictionEnabled(movementPredictionToggle.checked);
+});
+
 hydrateFormFromUrl();
 
-if (new URLSearchParams(window.location.search).get('autoconnect') === '1') {
+if (urlParams.get('autoconnect') === '1') {
   liveForm.requestSubmit();
 }
 
@@ -128,12 +140,11 @@ async function updateLiveView(state) {
   currentTick.textContent = formatValue(snapshot?.currentTick);
   protocolVersion.textContent = formatValue(snapshot?.protocolVersion);
   playerName.textContent = snapshot?.player?.name ?? '-';
-  playerPosition.textContent = snapshot?.player?.position
-    ? `${snapshot.player.position.x},${snapshot.player.position.y}`
-    : '-';
+  playerPosition.textContent = formatPlayerPosition(snapshot?.player?.position, state.displaySnapshot?.player?.position);
   worldSummary.textContent = `${snapshot?.visibleWorld?.nonEmptyCells ?? 0} cells / ${snapshot?.visibleWorld?.characters?.length ?? 0} characters`;
   commandCounts.textContent = `modeled ${snapshot?.commands?.modeled?.total ?? 0} / skipped ${snapshot?.commands?.skipped?.total ?? 0}`;
   lastMoveCommand.textContent = formatMoveCommand(state.lastMoveCommand);
+  movementPrediction.textContent = formatMovementPrediction(state.movementPrediction);
   areaRetarget.textContent = formatAreaRetarget(state.areaRetarget);
   lastReceivedTick.textContent = formatReceivedTick(state.lastReceivedTick);
   lastVisibleUpdate.textContent = formatVisibleUpdate(state.lastVisibleUpdate);
@@ -167,13 +178,13 @@ async function updateLiveView(state) {
 }
 
 function hydrateFormFromUrl() {
-  const params = new URLSearchParams(window.location.search);
   for (const name of ['gateway', 'username', 'password']) {
-    const value = params.get(name);
+    const value = urlParams.get(name);
     if (value !== null) {
       liveForm.elements[name].value = value;
     }
   }
+  movementPredictionToggle.checked = liveSession.state.movementPrediction?.enabled !== false;
 }
 
 function getSpriteAssets() {
@@ -213,6 +224,28 @@ function formatMoveCommand(command) {
   return `${command.status} ${command.type} ${command.x},${command.y} [${bytes}] after ${command.sentAfterDecodedTicks} tick(s)${suffix}`;
 }
 
+function formatMovementPrediction(prediction) {
+  if (!prediction) {
+    return '-';
+  }
+  if (!prediction.enabled) {
+    return 'disabled';
+  }
+
+  const visual = prediction.lastPredictedUpdate
+    ? `visual ${formatPoint(prediction.lastPredictedUpdate.predictedPosition)} in ${formatMs(prediction.lastPredictedUpdate.visualMs)}`
+    : 'visual -';
+  const reconciliation = prediction.lastAuthoritativeReconciliation
+    ? `${prediction.lastAuthoritativeReconciliation.status} ${prediction.lastAuthoritativeReconciliation.reason} in ${formatMs(prediction.lastAuthoritativeReconciliation.confirmationMs)} / ${prediction.lastAuthoritativeReconciliation.confirmationTicks ?? 0} tick(s)`
+    : 'authoritative -';
+
+  if (prediction.pending) {
+    return `pending ${formatPoint(prediction.pending.originalPosition)} -> ${formatPoint(prediction.pending.predictedPosition)} toward ${formatPoint(prediction.pending.target)}, ${visual}, ${reconciliation}`;
+  }
+
+  return `${prediction.status}${prediction.reason ? ` ${prediction.reason}` : ''}, ${visual}, ${reconciliation}`;
+}
+
 function formatAreaRetarget(retarget) {
   if (!retarget) {
     return '-';
@@ -236,7 +269,11 @@ function formatVisibleUpdate(update) {
   }
 
   const position = update.playerPosition ? `${update.playerPosition.x},${update.playerPosition.y}` : '-';
-  return `${position} at current ${formatValue(update.currentTick)} after ${update.decodedTicks} tick(s), update ${formatMs(update.updateMs)}`;
+  const source = update.source ?? 'authoritative';
+  const authoritative = update.authoritativePlayerPosition
+    ? `, authoritative ${formatPoint(update.authoritativePlayerPosition)}`
+    : '';
+  return `${source} ${position} at current ${formatValue(update.currentTick)} after ${update.decodedTicks} tick(s), update ${formatMs(update.updateMs)}, visual ${formatMs(update.visualMs)}${authoritative}`;
 }
 
 function updateLatencyMetrics(metrics) {
@@ -261,4 +298,26 @@ function formatBufferTargetChange(change) {
 
 function formatMs(value) {
   return value === null || value === undefined ? '-' : `${Number(value).toFixed(1)}ms`;
+}
+
+function formatPlayerPosition(authoritativePosition, visualPosition) {
+  const authoritative = formatPoint(authoritativePosition);
+  if (!visualPosition || authoritative === formatPoint(visualPosition)) {
+    return authoritative;
+  }
+
+  return `${authoritative} (visual ${formatPoint(visualPosition)})`;
+}
+
+function formatPoint(point) {
+  return point ? `${point.x},${point.y}` : '-';
+}
+
+function movementPredictionEnabledFromParams(params) {
+  const value = params.get('movementPrediction') ?? params.get('prediction');
+  if (value === null) {
+    return true;
+  }
+
+  return !['0', 'false', 'off', 'no'].includes(value.toLowerCase());
 }

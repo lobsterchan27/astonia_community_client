@@ -29,6 +29,202 @@ function tickSettingOrigin({ currentTick, x, y }) {
   ];
 }
 
+async function runPredictionScenario(page, scenario) {
+  await page.goto('/');
+
+  return page.evaluate(async (input) => {
+    const { AstoniaLiveSession } = await import('/src/live-session.js');
+    let socket;
+    let currentPosition = { ...input.initialPosition };
+
+    function clonePoint(point) {
+      return point ? { ...point } : null;
+    }
+
+    function makeSnapshot(position, ticks) {
+      const distance = 25;
+      const local = { x: distance, y: distance };
+      const character = {
+        id: 1,
+        name: 'FixtureCapture',
+        local: clonePoint(local),
+        world: clonePoint(position),
+        spriteId: 12_345,
+        action: null,
+        duration: null,
+        step: null,
+        direction: null,
+        health: null,
+        mana: null,
+        shield: null
+      };
+
+      return {
+        protocolVersion: 3,
+        currentTick: 10_000 + ticks,
+        login: { done: true, doneCount: 1 },
+        origin: clonePoint(position),
+        position: clonePoint(position),
+        player: {
+          ...character,
+          position: clonePoint(position)
+        },
+        playersById: {
+          1: {
+            id: 1,
+            name: 'FixtureCapture',
+            level: 1,
+            colors: [0, 0, 0],
+            clan: 0,
+            pkStatus: 0
+          }
+        },
+        carriedItem: null,
+        textMessages: [],
+        areaRetargets: { total: 0, latest: null, events: [] },
+        visibleWorld: {
+          width: distance * 2 + 1,
+          height: distance * 2 + 1,
+          distance,
+          updatedCells: 1,
+          nonEmptyCells: 1,
+          bounds: {
+            minX: distance,
+            minY: distance,
+            maxX: distance,
+            maxY: distance
+          },
+          layers: {
+            ground: 0,
+            floor: 0,
+            item: 0,
+            flags: 0,
+            character: 1,
+            effects: 0
+          },
+          cells: [],
+          characters: [character]
+        },
+        commands: {
+          modeled: { total: 0, byCommand: {} },
+          skipped: { total: 0, byCommand: {} }
+        },
+        ticksReplayed: ticks
+      };
+    }
+
+    async function waitFor(predicate) {
+      const startedAt = Date.now();
+      while (!predicate()) {
+        if (Date.now() - startedAt > 1000) {
+          throw new Error('Timed out waiting for condition');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    class ManualWebSocket extends EventTarget {
+      static CLOSING = 2;
+
+      constructor() {
+        super();
+        this.binaryType = '';
+        this.readyState = 1;
+        this.sent = [];
+      }
+
+      send(data) {
+        this.sent.push(Array.from(new Uint8Array(data)));
+      }
+
+      close() {
+        this.readyState = 3;
+        this.dispatchEvent(new CloseEvent('close', { code: 1000 }));
+      }
+
+      receive(bytes) {
+        this.dispatchEvent(new MessageEvent('message', { data: Uint8Array.from(bytes).buffer }));
+      }
+    }
+
+    const replay = {
+      ticks: 0,
+      replayTick() {
+        this.ticks += 1;
+      },
+      snapshot() {
+        return makeSnapshot(currentPosition, this.ticks);
+      }
+    };
+
+    const session = new AstoniaLiveSession({
+      decoderFactory: () => ({
+        async pushChunk(bytes) {
+          return [{ payload: new Uint8Array(bytes), rawLength: bytes.byteLength }];
+        }
+      }),
+      replayFactory: () => replay,
+      webSocketFactory: () => {
+        socket = new ManualWebSocket();
+        return socket;
+      },
+      movementPrediction: input.movementPrediction,
+      tickBufferOptions: {
+        fallbackTickIntervalMs: 1,
+        maxInitialHoldMs: 0
+      }
+    });
+
+    function summarize() {
+      const state = session.state;
+      const characterCommand = state.renderList?.commands.find((command) => command.layer === 'character') ?? null;
+      return {
+        decodedTicks: state.decodedTicks,
+        snapshotPosition: clonePoint(state.snapshot?.player?.position),
+        displayPosition: clonePoint(state.displaySnapshot?.player?.position),
+        renderCharacterWorld: clonePoint(characterCommand?.world),
+        renderCharacterLocal: clonePoint(characterCommand?.local),
+        movementPrediction: state.movementPrediction,
+        lastVisibleUpdate: state.lastVisibleUpdate,
+        lastMoveCommand: state.lastMoveCommand,
+        sentFrames: socket.sent
+      };
+    }
+
+    async function receiveAuthoritativePosition(position) {
+      currentPosition = { ...position };
+      const expectedTicks = session.state.decodedTicks + 1;
+      socket.receive([expectedTicks]);
+      await waitFor(() => session.state.decodedTicks === expectedTicks);
+      return summarize();
+    }
+
+    session.connect({
+      gatewayUrl: 'ws://prediction.gateway.test',
+      username: 'FixtureCapture',
+      password: 'fixturecapture',
+      protocolVersion: 3
+    });
+    socket.dispatchEvent(new Event('open'));
+    await waitFor(() => socket.sent.length === 4);
+
+    const beforeMove = await receiveAuthoritativePosition(input.initialPosition);
+    const moveResult = session.moveToTile(input.target);
+    const afterMove = summarize();
+    const afterTicks = [];
+    for (const position of input.authoritativePositions ?? []) {
+      afterTicks.push(await receiveAuthoritativePosition(position));
+    }
+
+    return {
+      moveResult,
+      beforeMove,
+      afterMove,
+      afterTicks
+    };
+  }, scenario);
+}
+
 async function installFakeGateway(page) {
   await page.addInitScript(() => {
     class FakeWebSocket extends EventTarget {
@@ -70,6 +266,155 @@ async function installFakeGateway(page) {
     window.__fakeAstoniaSockets = FakeWebSocket.instances;
   });
 }
+
+test('live session accepts a first-step movement prediction without mutating the authoritative snapshot', async ({ page }) => {
+  const result = await runPredictionScenario(page, {
+    initialPosition: { x: 10, y: 20 },
+    target: { x: 12, y: 21 },
+    movementPrediction: { enabled: true, confirmationTickWindow: 3 },
+    authoritativePositions: [{ x: 11, y: 21 }]
+  });
+
+  expect(result.moveResult).toBe(true);
+  expect(result.afterMove.sentFrames.at(-1)).toEqual([2, 12, 0, 21, 0]);
+  expect(result.afterMove.snapshotPosition).toEqual({ x: 10, y: 20 });
+  expect(result.afterMove.displayPosition).toEqual({ x: 11, y: 21 });
+  expect(result.afterMove.displayPosition).not.toEqual({ x: 12, y: 21 });
+  expect(result.afterMove.renderCharacterWorld).toEqual({ x: 11, y: 21 });
+  expect(result.afterMove.movementPrediction).toMatchObject({
+    status: 'pending',
+    pending: {
+      originalPosition: { x: 10, y: 20 },
+      predictedPosition: { x: 11, y: 21 },
+      target: { x: 12, y: 21 }
+    },
+    lastPredictedUpdate: {
+      predictedPosition: { x: 11, y: 21 }
+    }
+  });
+  expect(result.afterMove.lastVisibleUpdate).toMatchObject({
+    source: 'prediction',
+    playerPosition: { x: 11, y: 21 },
+    authoritativePlayerPosition: { x: 10, y: 20 }
+  });
+
+  expect(result.afterTicks[0]).toMatchObject({
+    snapshotPosition: { x: 11, y: 21 },
+    displayPosition: { x: 11, y: 21 },
+    movementPrediction: {
+      status: 'accepted',
+      pending: null,
+      lastAuthoritativeReconciliation: {
+        status: 'accepted',
+        reason: 'authoritative-position-matched',
+        confirmationTicks: 1
+      }
+    }
+  });
+});
+
+test('live session rejects a movement prediction when authoritative movement diverges', async ({ page }) => {
+  const result = await runPredictionScenario(page, {
+    initialPosition: { x: 10, y: 20 },
+    target: { x: 12, y: 20 },
+    movementPrediction: { enabled: true, confirmationTickWindow: 3 },
+    authoritativePositions: [{ x: 10, y: 21 }]
+  });
+
+  expect(result.afterMove.displayPosition).toEqual({ x: 11, y: 20 });
+  expect(result.afterTicks[0]).toMatchObject({
+    snapshotPosition: { x: 10, y: 21 },
+    displayPosition: { x: 10, y: 21 },
+    movementPrediction: {
+      status: 'rejected',
+      pending: null,
+      lastAuthoritativeReconciliation: {
+        status: 'rejected',
+        reason: 'authoritative-position-diverged',
+        authoritativePosition: { x: 10, y: 21 },
+        predictedPosition: { x: 11, y: 20 }
+      }
+    }
+  });
+});
+
+test('live session keeps delayed movement prediction only inside the confirmation window', async ({ page }) => {
+  const delayed = await runPredictionScenario(page, {
+    initialPosition: { x: 10, y: 20 },
+    target: { x: 12, y: 20 },
+    movementPrediction: { enabled: true, confirmationTickWindow: 3 },
+    authoritativePositions: [
+      { x: 10, y: 20 },
+      { x: 11, y: 20 }
+    ]
+  });
+
+  expect(delayed.afterTicks[0]).toMatchObject({
+    snapshotPosition: { x: 10, y: 20 },
+    displayPosition: { x: 11, y: 20 },
+    movementPrediction: {
+      status: 'pending',
+      pending: {
+        predictedPosition: { x: 11, y: 20 }
+      },
+      lastAuthoritativeReconciliation: {
+        status: 'pending',
+        reason: 'awaiting-authoritative-confirmation',
+        confirmationTicks: 1
+      }
+    }
+  });
+  expect(delayed.afterTicks[1].movementPrediction).toMatchObject({
+    status: 'accepted',
+    pending: null,
+    lastAuthoritativeReconciliation: {
+      status: 'accepted',
+      confirmationTicks: 2
+    }
+  });
+
+  const expired = await runPredictionScenario(page, {
+    initialPosition: { x: 10, y: 20 },
+    target: { x: 12, y: 20 },
+    movementPrediction: { enabled: true, confirmationTickWindow: 1 },
+    authoritativePositions: [{ x: 10, y: 20 }]
+  });
+
+  expect(expired.afterTicks[0]).toMatchObject({
+    snapshotPosition: { x: 10, y: 20 },
+    displayPosition: { x: 10, y: 20 },
+    movementPrediction: {
+      status: 'rejected',
+      pending: null,
+      lastAuthoritativeReconciliation: {
+        status: 'rejected',
+        reason: 'confirmation-window-expired',
+        confirmationTicks: 1
+      }
+    }
+  });
+});
+
+test('live session can disable movement prediction while still sending CL_MOVE', async ({ page }) => {
+  const result = await runPredictionScenario(page, {
+    initialPosition: { x: 10, y: 20 },
+    target: { x: 12, y: 20 },
+    movementPrediction: false,
+    authoritativePositions: []
+  });
+
+  expect(result.moveResult).toBe(true);
+  expect(result.afterMove.sentFrames.at(-1)).toEqual([2, 12, 0, 20, 0]);
+  expect(result.afterMove.snapshotPosition).toEqual({ x: 10, y: 20 });
+  expect(result.afterMove.displayPosition).toEqual({ x: 10, y: 20 });
+  expect(result.afterMove.renderCharacterWorld).toEqual({ x: 10, y: 20 });
+  expect(result.afterMove.movementPrediction).toMatchObject({
+    enabled: false,
+    status: 'disabled',
+    pending: null,
+    lastPredictedUpdate: null
+  });
+});
 
 test('move command encoder emits the native CL_MOVE five-byte packet', async ({ page }) => {
   await page.goto('/');
