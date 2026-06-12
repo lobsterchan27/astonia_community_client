@@ -103,6 +103,10 @@ test('browser live view connects through the gateway and renders decoded Docker 
   await expect(page.getByTestId('live-protocol-version')).toHaveText('2');
   await expect(page.getByTestId('live-player-name')).toHaveText('FixtureCapture');
   await expect(page.getByTestId('live-player-position')).toHaveText('126,179');
+  await expect(page.getByTestId('live-buffer-depth')).toContainText('/');
+  await expect(page.getByTestId('live-buffer-underflows')).toHaveText(/\d+/);
+  await expect(page.getByTestId('live-latency-arrival')).toContainText('jitter');
+  await expect(page.getByTestId('live-latency-timings')).toContainText('decode');
   await expect(page.getByTestId('live-command-counts')).toContainText('modeled 799');
   await expect(page.getByTestId('live-command-counts')).toContainText('skipped 68');
 
@@ -121,6 +125,7 @@ test('browser live view connects through the gateway and renders decoded Docker 
   expect(canvasSample.width).toBeGreaterThan(900);
   expect(canvasSample.height).toBeGreaterThan(500);
   expect(canvasSample.nonEmptyPixels).toBeGreaterThan(1000);
+  await expect(page.getByTestId('live-latency-timings')).toHaveText(/render \d+\.\dms/);
 });
 
 test('live session serializes back-to-back gateway messages through the decoder', async ({ page }) => {
@@ -419,4 +424,136 @@ test('live session reconnect starts with fresh decoder and replay state', async 
     finalDecodedTicks: 1,
     finalCurrentTick: 1
   });
+});
+
+test('live session exposes adaptive buffer latency metrics in public state', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const { AstoniaLiveSession } = await import('/src/live-session.js');
+    let socket;
+
+    function emptySnapshot(ticks) {
+      return {
+        protocolVersion: null,
+        currentTick: ticks,
+        login: { done: true, doneCount: ticks },
+        origin: null,
+        position: null,
+        player: null,
+        playersById: {},
+        carriedItem: null,
+        textMessages: [],
+        visibleWorld: {
+          width: 0,
+          height: 0,
+          distance: 0,
+          updatedCells: 0,
+          nonEmptyCells: 0,
+          bounds: null,
+          layers: {},
+          cells: [],
+          characters: []
+        },
+        commands: {
+          modeled: { total: 0, byCommand: {} },
+          skipped: { total: 0, byCommand: {} }
+        },
+        ticksReplayed: ticks
+      };
+    }
+
+    async function waitFor(predicate) {
+      const startedAt = Date.now();
+      while (!predicate()) {
+        if (Date.now() - startedAt > 1000) {
+          throw new Error('Timed out waiting for condition');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    class ManualWebSocket extends EventTarget {
+      static CLOSING = 2;
+
+      constructor() {
+        super();
+        this.binaryType = '';
+        this.readyState = 1;
+      }
+
+      send() {}
+
+      close() {
+        this.readyState = 3;
+        this.dispatchEvent(new CloseEvent('close', { code: 1000 }));
+      }
+
+      receive(bytes) {
+        this.dispatchEvent(new MessageEvent('message', { data: Uint8Array.from(bytes).buffer }));
+      }
+    }
+
+    const replay = {
+      ticks: 0,
+      replayTick() {
+        this.ticks += 1;
+      },
+      snapshot() {
+        return emptySnapshot(this.ticks);
+      }
+    };
+
+    const session = new AstoniaLiveSession({
+      decoderFactory: () => ({
+        async pushChunk(bytes) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return [{ payload: new Uint8Array([43]), rawLength: bytes.byteLength }];
+        }
+      }),
+      replayFactory: () => replay,
+      webSocketFactory: () => {
+        socket = new ManualWebSocket();
+        return socket;
+      },
+      tickBufferOptions: {
+        fallbackTickIntervalMs: 20,
+        maxInitialHoldMs: 20
+      }
+    });
+
+    session.connect({
+      gatewayUrl: 'ws://metrics.gateway.test',
+      username: 'FixtureCapture',
+      password: 'fixturecapture'
+    });
+    socket.dispatchEvent(new Event('open'));
+    socket.receive([1, 2, 3]);
+    await waitFor(() => session.state.decodedTicks === 1);
+    session.recordRenderTiming(3.25);
+
+    return {
+      lastReceivedTick: session.state.lastReceivedTick,
+      lastVisibleUpdate: session.state.lastVisibleUpdate,
+      latencyMetrics: session.state.latencyMetrics
+    };
+  });
+
+  expect(result.lastReceivedTick).toMatchObject({
+    decodedTicks: 1,
+    currentTick: 1,
+    rawBytes: 3,
+    targetQueueDepth: 1
+  });
+  expect(result.lastVisibleUpdate.updateMs).toBeGreaterThanOrEqual(0);
+  expect(result.latencyMetrics).toMatchObject({
+    queueDepth: 0,
+    targetQueueDepth: 1,
+    ticksQueued: 1,
+    ticksReplayed: 1,
+    underflows: 0
+  });
+  expect(result.latencyMetrics.decodeMs).toBeGreaterThan(0);
+  expect(result.latencyMetrics.updateMs).toBeGreaterThanOrEqual(0);
+  expect(result.latencyMetrics.renderMs).toBe(3.3);
 });

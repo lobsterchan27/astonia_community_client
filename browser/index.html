@@ -74,6 +74,14 @@
               <span>Frames</span>
               <strong data-testid="live-frame-counts">0 in / 0 out</strong>
             </div>
+            <div>
+              <span>Buffer</span>
+              <strong data-testid="live-buffer-depth">0/1</strong>
+            </div>
+            <div>
+              <span>Underflows</span>
+              <strong data-testid="live-buffer-underflows">0</strong>
+            </div>
           </div>
 
           <dl class="state-list">
@@ -96,6 +104,18 @@
             <div>
               <dt>Bytes</dt>
               <dd data-testid="live-byte-counts">0 in / 0 out</dd>
+            </div>
+            <div>
+              <dt>Arrival</dt>
+              <dd data-testid="live-latency-arrival">last - / avg - / jitter -</dd>
+            </div>
+            <div>
+              <dt>Timing</dt>
+              <dd data-testid="live-latency-timings">decode - / update - / render -</dd>
+            </div>
+            <div>
+              <dt>Target</dt>
+              <dd data-testid="live-buffer-target-change">-</dd>
             </div>
             <div>
               <dt>Move</dt>

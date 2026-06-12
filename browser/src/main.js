@@ -15,11 +15,16 @@ const tickCount = document.querySelector('[data-testid="live-tick-count"]');
 const currentTick = document.querySelector('[data-testid="live-current-tick"]');
 const protocolVersion = document.querySelector('[data-testid="live-protocol-version"]');
 const frameCounts = document.querySelector('[data-testid="live-frame-counts"]');
+const bufferDepth = document.querySelector('[data-testid="live-buffer-depth"]');
+const bufferUnderflows = document.querySelector('[data-testid="live-buffer-underflows"]');
 const playerName = document.querySelector('[data-testid="live-player-name"]');
 const playerPosition = document.querySelector('[data-testid="live-player-position"]');
 const worldSummary = document.querySelector('[data-testid="live-world-summary"]');
 const commandCounts = document.querySelector('[data-testid="live-command-counts"]');
 const byteCounts = document.querySelector('[data-testid="live-byte-counts"]');
+const latencyArrival = document.querySelector('[data-testid="live-latency-arrival"]');
+const latencyTimings = document.querySelector('[data-testid="live-latency-timings"]');
+const bufferTargetChange = document.querySelector('[data-testid="live-buffer-target-change"]');
 const lastMoveCommand = document.querySelector('[data-testid="live-last-move-command"]');
 const lastReceivedTick = document.querySelector('[data-testid="live-last-received-tick"]');
 const lastVisibleUpdate = document.querySelector('[data-testid="live-last-visible-update"]');
@@ -116,6 +121,7 @@ async function updateLiveView(state) {
   tickCount.textContent = String(state.decodedTicks);
   frameCounts.textContent = `${state.inboundFrames} in / ${state.outboundFrames} out`;
   byteCounts.textContent = `${state.inboundBytes} in / ${state.outboundBytes} out`;
+  updateLatencyMetrics(state.latencyMetrics);
 
   const snapshot = state.snapshot;
   currentTick.textContent = formatValue(snapshot?.currentTick);
@@ -139,6 +145,7 @@ async function updateLiveView(state) {
 
   if (state.renderList) {
     const serial = ++renderSerial;
+    const renderStartedAt = performance.now();
     await renderAstoniaRenderListToCanvas(worldCanvas, state.renderList);
     try {
       const assets = await getSpriteAssets();
@@ -149,6 +156,10 @@ async function updateLiveView(state) {
       if (serial === renderSerial) {
         await renderAstoniaRenderListToCanvas(worldCanvas, state.renderList);
       }
+    }
+    if (serial === renderSerial) {
+      liveSession.recordRenderTiming(performance.now() - renderStartedAt);
+      updateLatencyMetrics(liveSession.state.latencyMetrics);
     }
   }
 }
@@ -205,7 +216,7 @@ function formatReceivedTick(tick) {
     return '-';
   }
 
-  return `decoded ${tick.decodedTicks}, current ${formatValue(tick.currentTick)}, raw ${tick.rawBytes} byte(s)`;
+  return `decoded ${tick.decodedTicks}, current ${formatValue(tick.currentTick)}, raw ${tick.rawBytes} byte(s), queue ${tick.queueDepth}/${tick.targetQueueDepth}`;
 }
 
 function formatVisibleUpdate(update) {
@@ -214,5 +225,29 @@ function formatVisibleUpdate(update) {
   }
 
   const position = update.playerPosition ? `${update.playerPosition.x},${update.playerPosition.y}` : '-';
-  return `${position} at current ${formatValue(update.currentTick)} after ${update.decodedTicks} tick(s)`;
+  return `${position} at current ${formatValue(update.currentTick)} after ${update.decodedTicks} tick(s), update ${formatMs(update.updateMs)}`;
+}
+
+function updateLatencyMetrics(metrics) {
+  if (!metrics) {
+    return;
+  }
+
+  bufferDepth.textContent = `${metrics.queueDepth}/${metrics.targetQueueDepth}`;
+  bufferUnderflows.textContent = String(metrics.underflows);
+  latencyArrival.textContent = `last ${formatMs(metrics.tickArrivalIntervalMs)}, avg ${formatMs(metrics.averageTickArrivalIntervalMs)}, jitter ${formatMs(metrics.tickArrivalJitterMs)}`;
+  latencyTimings.textContent = `decode ${formatMs(metrics.decodeMs)} / update ${formatMs(metrics.updateMs)} / render ${formatMs(metrics.renderMs)}`;
+  bufferTargetChange.textContent = formatBufferTargetChange(metrics.lastBufferTargetChange);
+}
+
+function formatBufferTargetChange(change) {
+  if (!change) {
+    return '-';
+  }
+
+  return `${change.from}->${change.to} ${change.reason} at ${formatMs(change.atMs)} (queue ${change.queueDepth}, underflows ${change.underflows})`;
+}
+
+function formatMs(value) {
+  return value === null || value === undefined ? '-' : `${Number(value).toFixed(1)}ms`;
 }

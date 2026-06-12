@@ -3,6 +3,7 @@ import { AstoniaProtocolStateReplay } from './protocol/state-replay.js';
 import { AstoniaTickStreamDecoder } from './protocol/tick-stream-decoder.js';
 import { buildAstoniaLoginFrames } from './protocol/login.js';
 import { encodeAstoniaMoveCommand } from './protocol/move-command.js';
+import { AdaptiveTickJitterBuffer } from './tick-jitter-buffer.js';
 
 const DEFAULT_GATEWAY_URL = 'ws://127.0.0.1:8787';
 
@@ -10,8 +11,15 @@ export class AstoniaLiveSession extends EventTarget {
   #webSocketFactory;
   #decoderFactory;
   #replayFactory;
+  #tickBufferFactory;
+  #now;
+  #setTimeout;
+  #clearTimeout;
   #decoder;
   #replay;
+  #tickBuffer;
+  #replayTimer;
+  #replayTimerDueAt;
   #socket;
   #messageQueue;
   #state;
@@ -21,8 +29,16 @@ export class AstoniaLiveSession extends EventTarget {
     this.#webSocketFactory = options.webSocketFactory ?? ((url) => new WebSocket(url));
     this.#decoderFactory = options.decoderFactory ?? (() => new AstoniaTickStreamDecoder());
     this.#replayFactory = options.replayFactory ?? (() => new AstoniaProtocolStateReplay(options.replayOptions));
+    this.#tickBufferFactory =
+      options.tickBufferFactory ?? (() => new AdaptiveTickJitterBuffer(options.tickBufferOptions));
+    this.#now = options.now ?? (() => globalThis.performance?.now?.() ?? Date.now());
+    this.#setTimeout = options.setTimeout ?? ((callback, delay) => setTimeout(callback, delay));
+    this.#clearTimeout = options.clearTimeout ?? ((timer) => clearTimeout(timer));
     this.#decoder = null;
     this.#replay = null;
+    this.#tickBuffer = null;
+    this.#replayTimer = null;
+    this.#replayTimerDueAt = null;
     this.#socket = null;
     this.#messageQueue = Promise.resolve();
     this.#state = initialState();
@@ -40,9 +56,12 @@ export class AstoniaLiveSession extends EventTarget {
     const gatewayUrl = options.gatewayUrl || DEFAULT_GATEWAY_URL;
     this.#decoder = this.#decoderFactory();
     this.#replay = this.#replayFactory();
+    this.#tickBuffer = this.#tickBufferFactory();
+    this.#clearReplayTimer();
     this.#messageQueue = Promise.resolve();
     this.#state = {
       ...initialState(),
+      latencyMetrics: this.#tickBuffer.metrics(),
       gatewayUrl,
       status: 'connecting',
       statusDetail: `Opening ${gatewayUrl}`
@@ -104,8 +123,14 @@ export class AstoniaLiveSession extends EventTarget {
   }
 
   close() {
+    this.#clearReplayTimer();
     this.#socket?.close();
     this.#socket = null;
+  }
+
+  recordRenderTiming(durationMs) {
+    this.#tickBuffer?.recordRenderTiming(durationMs);
+    this.#state.latencyMetrics = this.#tickBuffer?.metrics() ?? this.#state.latencyMetrics;
   }
 
   moveToTile(target) {
@@ -154,43 +179,117 @@ export class AstoniaLiveSession extends EventTarget {
 
       const decoder = this.#decoder;
       const replay = this.#replay;
-      if (!decoder || !replay) {
+      const tickBuffer = this.#tickBuffer;
+      if (!decoder || !replay || !tickBuffer) {
         return;
       }
 
+      const decodeStartedAt = this.#now();
       const ticks = await decoder.pushChunk(bytes);
-      if (!this.#isCurrentSocket(socket) || decoder !== this.#decoder || replay !== this.#replay) {
+      const decodeMs = this.#now() - decodeStartedAt;
+      if (!this.#isCurrentSocket(socket) || decoder !== this.#decoder || replay !== this.#replay || tickBuffer !== this.#tickBuffer) {
         return;
       }
+      tickBuffer.recordDecodeTiming(decodeMs);
 
-      for (const tick of ticks) {
-        const tickIndex = this.#state.decodedTicks;
-        replay.replayTick(tick, { tickIndex });
-        this.#state.decodedTicks += 1;
-        this.#state.lastRawTickBytes = tick.rawLength;
-      }
-
-      this.#state.snapshot = replay.snapshot();
-      this.#state.renderList = createAstoniaRenderList(this.#state.snapshot);
       if (ticks.length > 0) {
-        this.#state.lastReceivedTick = {
-          decodedTicks: this.#state.decodedTicks,
-          currentTick: this.#state.snapshot.currentTick ?? null,
-          rawBytes: ticks.at(-1).rawLength
-        };
-        this.#state.lastVisibleUpdate = {
-          decodedTicks: this.#state.decodedTicks,
-          currentTick: this.#state.snapshot.currentTick ?? null,
-          playerPosition: clonePoint(this.#state.snapshot.player?.position)
-        };
+        tickBuffer.enqueueTicks(ticks, this.#now());
       }
-      this.#state.status = this.#state.snapshot.login.done ? 'live' : 'receiving';
+      this.#state.latencyMetrics = tickBuffer.metrics();
+      this.#state.status = this.#state.snapshot?.login?.done ? 'live' : 'receiving';
       this.#state.statusDetail =
-        ticks.length > 0 ? `Decoded ${ticks.length} tick(s) from the latest gateway frame.` : 'Received gateway bytes; waiting for a full tick.';
+        ticks.length > 0
+          ? `Queued ${ticks.length} decoded tick(s) from the latest gateway frame.`
+          : 'Received gateway bytes; waiting for a full tick.';
       this.#emitChange();
+      this.#scheduleBufferedReplay();
     } catch (error) {
       this.#fail(error, socket);
     }
+  }
+
+  #replayBufferedTick() {
+    this.#replayTimer = null;
+    this.#replayTimerDueAt = null;
+
+    const replay = this.#replay;
+    const tickBuffer = this.#tickBuffer;
+    if (!replay || !tickBuffer) {
+      return;
+    }
+
+    try {
+      const tick = tickBuffer.takeTick(this.#now());
+      if (!tick) {
+        this.#state.latencyMetrics = tickBuffer.metrics();
+        this.#state.statusDetail = `Jitter buffer underflow; increasing target to ${this.#state.latencyMetrics.targetQueueDepth} tick(s).`;
+        this.#emitChange();
+        this.#scheduleBufferedReplay();
+        return;
+      }
+
+      const updateStartedAt = this.#now();
+      const tickIndex = this.#state.decodedTicks;
+      replay.replayTick(tick, { tickIndex });
+      this.#state.decodedTicks += 1;
+      this.#state.lastRawTickBytes = tick.rawLength ?? 0;
+      this.#state.snapshot = replay.snapshot();
+      this.#state.renderList = createAstoniaRenderList(this.#state.snapshot);
+      tickBuffer.recordUpdateTiming(this.#now() - updateStartedAt);
+      this.#state.latencyMetrics = tickBuffer.metrics();
+      this.#state.lastReceivedTick = {
+        decodedTicks: this.#state.decodedTicks,
+        currentTick: this.#state.snapshot.currentTick ?? null,
+        rawBytes: tick.rawLength ?? 0,
+        queueDepth: this.#state.latencyMetrics.queueDepth,
+        targetQueueDepth: this.#state.latencyMetrics.targetQueueDepth
+      };
+      this.#state.lastVisibleUpdate = {
+        decodedTicks: this.#state.decodedTicks,
+        currentTick: this.#state.snapshot.currentTick ?? null,
+        playerPosition: clonePoint(this.#state.snapshot.player?.position),
+        updateMs: this.#state.latencyMetrics.updateMs
+      };
+      this.#state.status = this.#state.snapshot.login.done ? 'live' : 'receiving';
+      this.#state.statusDetail = `Replayed buffered tick at ${this.#state.latencyMetrics.queueDepth}/${this.#state.latencyMetrics.targetQueueDepth} queued tick(s).`;
+      this.#emitChange();
+      this.#scheduleBufferedReplay();
+    } catch (error) {
+      this.#fail(error, this.#socket);
+    }
+  }
+
+  #scheduleBufferedReplay() {
+    if (!this.#tickBuffer) {
+      return;
+    }
+
+    const nowMs = this.#now();
+    const delayMs = this.#tickBuffer.nextDelayMs(nowMs);
+    if (delayMs === null) {
+      return;
+    }
+
+    const dueAtMs = nowMs + delayMs;
+    if (this.#replayTimer !== null) {
+      if (this.#replayTimerDueAt !== null && this.#replayTimerDueAt <= dueAtMs) {
+        return;
+      }
+      this.#clearReplayTimer();
+    }
+
+    this.#replayTimerDueAt = dueAtMs;
+    this.#replayTimer = this.#setTimeout(() => this.#replayBufferedTick(), delayMs);
+  }
+
+  #clearReplayTimer() {
+    if (this.#replayTimer === null) {
+      return;
+    }
+
+    this.#clearTimeout(this.#replayTimer);
+    this.#replayTimer = null;
+    this.#replayTimerDueAt = null;
   }
 
   #fail(error, socket) {
@@ -213,6 +312,7 @@ export class AstoniaLiveSession extends EventTarget {
 }
 
 function initialState() {
+  const latencyMetrics = new AdaptiveTickJitterBuffer().metrics();
   return {
     status: 'idle',
     statusDetail: 'Not connected.',
@@ -227,7 +327,8 @@ function initialState() {
     renderList: null,
     lastMoveCommand: null,
     lastReceivedTick: null,
-    lastVisibleUpdate: null
+    lastVisibleUpdate: null,
+    latencyMetrics
   };
 }
 
@@ -238,7 +339,8 @@ function cloneState(state) {
     renderList: state.renderList,
     lastMoveCommand: state.lastMoveCommand ? cloneDebugObject(state.lastMoveCommand) : null,
     lastReceivedTick: state.lastReceivedTick ? cloneDebugObject(state.lastReceivedTick) : null,
-    lastVisibleUpdate: state.lastVisibleUpdate ? cloneDebugObject(state.lastVisibleUpdate) : null
+    lastVisibleUpdate: state.lastVisibleUpdate ? cloneDebugObject(state.lastVisibleUpdate) : null,
+    latencyMetrics: state.latencyMetrics ? cloneDebugObject(state.latencyMetrics) : null
   };
 }
 
