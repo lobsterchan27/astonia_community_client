@@ -298,6 +298,62 @@ test('generated native module can read packaged resource filesystem', async ({ p
 	expect(failures).toEqual([]);
 });
 
+test('generated native module exposes smoke observability getters', async ({ page }) => {
+	if (!existsSync(distModulePath)) {
+		test.skip(true, 'native WASM module has not been built');
+	}
+
+	const failures = collectBrowserFailures(page);
+	await page.goto('/');
+
+	const result = await page.evaluate(async () => {
+		const imported = await import(`/dist/astonia-client.js?t=${Date.now()}`);
+		const createModule = imported.default ?? imported.createAstoniaClientModule;
+		const module = await createModule({
+			noInitialRun: true,
+			canvas: document.querySelector('[data-testid="wasm-client-canvas"]'),
+			locateFile(path) {
+				return `/dist/${path}`;
+			}
+		});
+
+		const getters = [
+			'_astonia_smoke_login_done',
+			'_astonia_smoke_sockstate',
+			'_astonia_smoke_protocol_version',
+			'_astonia_smoke_tick',
+			'_astonia_smoke_queued_ticks',
+			'_astonia_smoke_queue_size'
+		];
+		const missing = getters.filter((name) => typeof module[name] !== 'function');
+
+		return {
+			missing,
+			values: missing.length
+				? null
+				: {
+						loginDone: module._astonia_smoke_login_done(),
+						sockstate: module._astonia_smoke_sockstate(),
+						protocolVersion: module._astonia_smoke_protocol_version(),
+						tick: module._astonia_smoke_tick(),
+						queuedTicks: module._astonia_smoke_queued_ticks(),
+						queueSize: module._astonia_smoke_queue_size()
+					}
+		};
+	});
+
+	expect(result.missing).toEqual([]);
+	expect(result.values).toEqual({
+		loginDone: 0,
+		sockstate: 0,
+		protocolVersion: 0,
+		tick: 0,
+		queuedTicks: 0,
+		queueSize: 0
+	});
+	expect(failures).toEqual([]);
+});
+
 test('browser package only contains the WASM/WebGPU host source', () => {
 	expect(sourceFilesUnder('src')).toEqual(['src/main.js', 'src/styles.css']);
 });

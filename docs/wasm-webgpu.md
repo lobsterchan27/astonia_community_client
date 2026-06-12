@@ -50,6 +50,28 @@ The C client remains authoritative for protocol, simulation, input, and drawing.
    Launch the generated native module from `browser/`, connect through the
    gateway, and verify that the real client owns the canvas.
 
+## Smoke Observability Oracle
+
+Browser login smoke tests must assert native state, not decoded protocol bytes.
+The native WASM module exports this read-only oracle:
+
+- `astonia_smoke_login_done()` returns the C client `login_done` flag.
+- `astonia_smoke_sockstate()` returns the C client network state.
+- `astonia_smoke_protocol_version()` returns the negotiated protocol version.
+- `astonia_smoke_tick()` returns the processed native game tick.
+- `astonia_smoke_queued_ticks()` returns the native count of complete ticks in
+  the input buffer.
+- `astonia_smoke_queue_size()` returns the native queued tick count waiting for
+  processing.
+
+Until the full C client is linked into the browser module, these getters are
+present with zero-valued weak fallbacks so browser tests can verify the ABI. The
+final live-login smoke should wait for `sockstate == 4`, `login_done == 1`, a
+non-zero `protocol_version`, and evidence of native tick progress through
+`tick`, `queued_ticks`, or `queue_size`. Browser JavaScript must not parse
+`SV_LOGINDONE`, `SV_PROTOCOL`, tick packet headers, or any gameplay payload to
+derive those assertions.
+
 ## Commands
 
 Install the pinned Emscripten SDK into the ignored repo-local dependency

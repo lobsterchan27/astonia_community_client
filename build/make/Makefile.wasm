@@ -15,6 +15,7 @@ SOKOL_DIR := third_party/sokol
 WASM_SRCS := \
 	src/wasm/sokol_webgpu_harness.c \
 	src/wasm/resource_fs_check.c \
+	src/wasm/astonia_smoke_observability.c \
 	src/wasm/astonia_net_wasm.c \
 	src/wasm/sokol_sdl_renderer.c \
 	src/render_backend/sokol_webgpu_backend.c \
@@ -45,14 +46,15 @@ WASM_FLAGS := \
 	-sMODULARIZE=1 \
 	-sEXPORT_ES6=1 \
 	-sEXPORT_NAME=createAstoniaClientModule \
-	-sEXPORTED_FUNCTIONS=_astonia_resource_fs_check,_astonia_resource_fs_expected_count \
+	-sEXPORTED_FUNCTIONS=_astonia_resource_fs_check,_astonia_resource_fs_expected_count,_astonia_smoke_login_done,_astonia_smoke_sockstate,_astonia_smoke_protocol_version,_astonia_smoke_tick,_astonia_smoke_queued_ticks,_astonia_smoke_queue_size \
 	-sALLOW_MEMORY_GROWTH=1 \
 	-sMAXIMUM_MEMORY=1GB \
 	-sNO_EXIT_RUNTIME=1
 
 all: check-env $(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA)
 
-$(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA) &: $(WASM_SRCS) $(WASM_JS_LIBS) src/render_backend/render_backend.h src/render_backend/sokol_webgpu_backend.h \
+$(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA) &: $(WASM_SRCS) $(WASM_JS_LIBS) src/wasm/astonia_smoke_observability.h \
+		src/render_backend/render_backend.h src/render_backend/sokol_webgpu_backend.h \
 		$(SOKOL_DIR)/sokol_app.h $(SOKOL_DIR)/sokol_gfx.h $(SOKOL_DIR)/sokol_glue.h $(SOKOL_DIR)/sokol_log.h \
 		$(RESOURCE_FILES)
 	@mkdir -p $(OUT_DIR)

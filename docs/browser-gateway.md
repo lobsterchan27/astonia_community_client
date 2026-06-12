@@ -15,6 +15,12 @@ The real client logic belongs in the C client compiled to WASM. Browser
 JavaScript may only host the generated module and provide browser APIs that C
 cannot call directly, such as WebSocket transport.
 
+Live browser smoke assertions should use the native WASM observability getters
+documented in `docs/wasm-webgpu.md`, such as `astonia_smoke_login_done`,
+`astonia_smoke_sockstate`, `astonia_smoke_protocol_version`, and native tick
+state. The gateway and browser transport shim must continue to pipe bytes
+without interpreting Astonia server opcodes.
+
 ## Run
 
 From this repository:
