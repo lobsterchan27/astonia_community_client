@@ -54,6 +54,10 @@ void set_mapadd(int addx, int addy);
 void update_user_keys(void);
 
 int main_init(void);
+/* Browser-callable loop lifecycle. main_loop_step() returns nonzero while running. */
+DLL_EXPORT int main_loop_init(void);
+DLL_EXPORT int main_loop_step(void);
+DLL_EXPORT void main_loop_shutdown(void);
 int main_loop(void);
 void main_exit(void);
 void gui_dump(FILE *fp);

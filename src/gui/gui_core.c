@@ -9,6 +9,9 @@
 #include <time.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_stdinc.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 
 #include "astonia.h"
 #include "gui/gui.h"
@@ -17,6 +20,12 @@
 #include "game/game.h"
 #include "sdl/sdl.h"
 #include "modder/modder.h"
+
+#ifdef __EMSCRIPTEN__
+#define MAIN_LOOP_EXPORT EMSCRIPTEN_KEEPALIVE DLL_EXPORT
+#else
+#define MAIN_LOOP_EXPORT DLL_EXPORT
+#endif
 
 // Forward declarations for functions used by gui_insert
 void cmd_add_text(const char *buf, int typ);
@@ -231,6 +240,16 @@ uint64_t gui_time_network = 0;
 uint64_t gui_frametime = 0;
 uint64_t gui_ticktime = 0;
 
+struct main_loop_state {
+	int initialized;
+	int ltick;
+	int do_one_tick;
+	uint64_t gui_last_frame;
+	uint64_t gui_last_tick;
+};
+
+static struct main_loop_state main_loop_state;
+
 #define MAXQUEST2 10
 
 // Forward declarations for functions in other GUI modules
@@ -325,130 +344,203 @@ static void flip_at(unsigned int t)
 	}
 }
 
-int main_loop(void)
+static void flip_now(void)
+{
+	int sdl_pre_do(void);
+
+	sdl_loop();
+	if (sdl_is_shown()) {
+		sdl_pre_do();
+		sdl_render();
+	}
+}
+
+static void schedule_next_tick(void)
+{
+	int tmp;
+
+	if (!main_loop_state.do_one_tick) {
+		return;
+	}
+
+	if (game_options & GO_SHORT) {
+		tmp = calc_tick_delay_short(lasttick + q_size);
+	} else {
+		tmp = calc_tick_delay_normal(lasttick + q_size);
+	}
+	nexttick += tmp;
+	tota += tmp;
+	if (tick % 24 == 0) {
+		tota /= 2;
+		skip /= 2;
+		idle /= 2;
+		frames /= 2;
+	}
+
+	main_loop_state.do_one_tick = 0;
+}
+
+static void schedule_next_frame(void)
+{
+	nextframe += MPF;
+
+	// try to sync frame to tick?
+	if (abs(nexttick - nextframe) < MPF / 2) {
+		nextframe = nexttick;
+	}
+}
+
+MAIN_LOOP_EXPORT int main_loop_init(void)
+{
+	if (main_loop_state.initialized) {
+		return 0;
+	}
+
+	amod_gamestart();
+	nexttick = (int)(SDL_GetTicks() + (Uint32)MPT);
+	nextframe = (int)(SDL_GetTicks() + (Uint32)MPF);
+	main_loop_state.ltick = 0;
+	main_loop_state.do_one_tick = 1;
+	main_loop_state.gui_last_frame = 0;
+	main_loop_state.gui_last_tick = 0;
+	main_loop_state.initialized = 1;
+
+	return 0;
+}
+
+static int main_loop_step_internal(int block_until_frame)
 {
 	void prefetch_game(tick_t attick);
 	int64_t timediff;
-	int tmp, ltick = 0;
 	tick_t attick;
 	long long start;
-	int do_one_tick = 1;
-	uint64_t gui_last_frame = 0, gui_last_tick = 0;
 
-	amod_gamestart();
+	if (!main_loop_state.initialized || quit) {
+		return 0;
+	}
 
-	nexttick = (int)(SDL_GetTicks() + (Uint32)MPT);
-	nextframe = (int)(SDL_GetTicks() + (Uint32)MPF);
+	now = SDL_GetTicks();
 
-	while (!quit) {
-		now = SDL_GetTicks();
+	start = (long long)SDL_GetTicks();
+	poll_network();
 
-		start = (long long)SDL_GetTicks();
-		poll_network();
+	// synchronise frames and ticks if at the same speed
+	if (sockstate == 4 && MPF == MPT) {
+		nextframe = nexttick;
+	}
 
-		// synchronise frames and ticks if at the same speed
-		if (sockstate == 4 && MPF == MPT) {
-			nextframe = nexttick;
+	// check if we can go on
+	if (sockstate > 2) {
+		// decode as many ticks as we can
+		// and add their contents to the prefetch queue
+		while ((attick = next_tick())) {
+			if (!(attick & 3) || !game_slowdown) {
+				prefetch_game(attick);
+			}
 		}
 
-		// check if we can go on
-		if (sockstate > 2) {
-			// decode as many ticks as we can
-			// and add their contents to the prefetch queue
-			while ((attick = next_tick())) {
-				if (!(attick & 3) || !game_slowdown) {
-					prefetch_game(attick);
-				}
+		// get one tick to display?
+		timediff = (int64_t)((unsigned int)nexttick - SDL_GetTicks());
+		if (timediff < 0 ||
+		    nexttick <= nextframe) { // do ticks when they are due, or before the corresponding frame is shown
+			main_loop_state.do_one_tick = 1;
+			gui_ticktime = SDL_GetTicks() - main_loop_state.gui_last_tick;
+			main_loop_state.gui_last_tick = SDL_GetTicks();
+			do_tick();
+			main_loop_state.ltick++;
+
+			if (sockstate == 4 && main_loop_state.ltick % TICKS == 0) {
+				cl_ticker();
 			}
-
-			// get one tick to display?
-			timediff = (int64_t)((unsigned int)nexttick - SDL_GetTicks());
-			if (timediff < 0 ||
-			    nexttick <= nextframe) { // do ticks when they are due, or before the corresponding frame is shown
-				do_one_tick = 1;
-				gui_ticktime = SDL_GetTicks() - gui_last_tick;
-				gui_last_tick = SDL_GetTicks();
-				do_tick();
-				ltick++;
-
-				if (sockstate == 4 && ltick % TICKS == 0) {
-					cl_ticker();
-				}
-				amod_tick();
+			amod_tick();
 #ifdef ENABLE_SHAREDMEM
-				sharedmem_update();
+			sharedmem_update();
 #endif
-			}
-		}
-
-		if (sockstate == 4) {
-			timediff = (int64_t)((unsigned int)nextframe - SDL_GetTicks());
-		} else {
-			timediff = 1;
-		}
-		gui_time_network += (uint64_t)(SDL_GetTicks() - (Uint64)start);
-
-		if (timediff > -MPF / 2) {
-#ifdef TICKPRINT
-			printf("Display tick %u\n", tick);
-#endif
-			gui_frametime = SDL_GetTicks() - gui_last_frame;
-			gui_last_frame = SDL_GetTicks();
-
-			if (sdl_is_shown() && (!(tick & 3) || !game_slowdown || sockstate != 4)) {
-				sdl_clear();
-				display();
-				amod_frame();
-				display_mouseover();
-				minimap_update();
-			}
-
-			timediff = (int64_t)((unsigned int)nextframe - SDL_GetTicks());
-			if (timediff > 0) {
-				idle += timediff;
-			} else {
-				skip -= timediff;
-			}
-
-			frames++;
-
-			flip_at((unsigned int)nextframe);
-		} else {
-#ifdef TICKPRINT
-			printf("Skip tick %u\n", tick);
-#endif
-			skip -= timediff;
-
-			sdl_loop();
-		}
-
-		if (do_one_tick) {
-			if (game_options & GO_SHORT) {
-				tmp = calc_tick_delay_short(lasttick + q_size);
-			} else {
-				tmp = calc_tick_delay_normal(lasttick + q_size);
-			}
-			nexttick += tmp;
-			tota += tmp;
-			if (tick % 24 == 0) {
-				tota /= 2;
-				skip /= 2;
-				idle /= 2;
-				frames /= 2;
-			}
-
-			do_one_tick = 0;
-		}
-
-		nextframe += MPF;
-
-		// try to sync frame to tick?
-		if (abs(nexttick - nextframe) < MPF / 2) {
-			nextframe = nexttick;
 		}
 	}
 
+	if (sockstate == 4 || !block_until_frame) {
+		timediff = (int64_t)((unsigned int)nextframe - SDL_GetTicks());
+	} else {
+		timediff = 1;
+	}
+	gui_time_network += (uint64_t)(SDL_GetTicks() - (Uint64)start);
+
+	if (!block_until_frame && timediff > 0) {
+		sdl_loop();
+		schedule_next_tick();
+		return !quit;
+	}
+
+	if (timediff > -MPF / 2) {
+#ifdef TICKPRINT
+		printf("Display tick %u\n", tick);
+#endif
+		gui_frametime = SDL_GetTicks() - main_loop_state.gui_last_frame;
+		main_loop_state.gui_last_frame = SDL_GetTicks();
+
+		if (sdl_is_shown() && (!(tick & 3) || !game_slowdown || sockstate != 4)) {
+			sdl_clear();
+			display();
+			amod_frame();
+			display_mouseover();
+			minimap_update();
+		}
+
+		timediff = (int64_t)((unsigned int)nextframe - SDL_GetTicks());
+		if (timediff > 0) {
+			idle += timediff;
+		} else {
+			skip -= timediff;
+		}
+
+		frames++;
+
+		if (block_until_frame) {
+			flip_at((unsigned int)nextframe);
+		} else {
+			flip_now();
+		}
+	} else {
+#ifdef TICKPRINT
+		printf("Skip tick %u\n", tick);
+#endif
+		skip -= timediff;
+
+		sdl_loop();
+	}
+
+	schedule_next_tick();
+	schedule_next_frame();
+
+	return !quit;
+}
+
+MAIN_LOOP_EXPORT int main_loop_step(void)
+{
+	if (!main_loop_state.initialized || quit) {
+		return 0;
+	}
+
+	return main_loop_step_internal(0);
+}
+
+MAIN_LOOP_EXPORT void main_loop_shutdown(void)
+{
+	if (!main_loop_state.initialized) {
+		return;
+	}
+
 	close_client();
+	bzero(&main_loop_state, sizeof(main_loop_state));
+}
+
+int main_loop(void)
+{
+	main_loop_init();
+	while (main_loop_step_internal(1)) {
+	}
+	main_loop_shutdown();
 
 	return 0;
 }
