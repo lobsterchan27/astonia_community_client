@@ -141,13 +141,16 @@ static inline void work_state_store(struct sdl_texture *st, texture_work_state_t
 	__atomic_store_n(state_ptr, (uint8_t)new_state, __ATOMIC_RELEASE);
 }
 
-#ifndef HAVE_DDFONT
-#define HAVE_DDFONT
-
+#ifndef ASTONIA_RENDERFONT_STRUCT_DEFINED
+#define ASTONIA_RENDERFONT_STRUCT_DEFINED
 struct renderfont {
 	int dim;
 	unsigned char *raw;
 };
+#endif
+
+#ifndef HAVE_DDFONT
+#define HAVE_DDFONT
 #endif
 
 #define RENDER_TEXT_TERMINATOR '\xB0' // draw text terminator - (zero stays one, too)

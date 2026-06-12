@@ -1,4 +1,4 @@
-.PHONY: all check-env renderer-contract-check resource-fs-native-check clean
+.PHONY: all check-env renderer-contract-check resource-fs-native-check native-startup-objects native-startup-source-list clean
 
 OUT_DIR ?= browser/dist
 TARGET_JS := $(OUT_DIR)/astonia-client.js
@@ -20,6 +20,51 @@ WASM_SRCS := \
 	src/wasm/sokol_sdl_renderer.c \
 	src/render_backend/sokol_webgpu_backend.c \
 	src/render_backend/sokol_webgpu_sokol.c
+
+# Derived from build/make/Makefile.linux OBJS. This is a compile-only
+# preflight for the native client startup graph, not a browser final link.
+NATIVE_STARTUP_SRCS := \
+	src/gui/gui_core.c \
+	src/gui/gui_input.c \
+	src/gui/gui_display.c \
+	src/gui/gui_inventory.c \
+	src/gui/gui_buttons.c \
+	src/gui/gui_map.c \
+	src/client/client.c \
+	src/client/protocol.c \
+	src/client/skill.c \
+	src/game/game_core.c \
+	src/game/game_effects.c \
+	src/game/game_lighting.c \
+	src/game/game_display.c \
+	src/game/render.c \
+	src/game/font.c \
+	src/game/main.c \
+	src/game/sprite.c \
+	src/game/sprite_config.c \
+	src/game/memory.c \
+	src/modder/modder.c \
+	src/sdl/sdl_core.c \
+	src/sdl/sdl_texture.c \
+	src/sdl/sdl_image.c \
+	src/sdl/sdl_effects.c \
+	src/sdl/sdl_draw.c \
+	src/sdl/sound.c \
+	src/helper/helper.c \
+	src/gui/dots.c \
+	src/gui/display.c \
+	src/gui/teleport.c \
+	src/gui/color.c \
+	src/gui/cmd.c \
+	src/gui/questlog.c \
+	src/gui/context.c \
+	src/gui/hover.c \
+	src/gui/minimap.c \
+	src/game/memory_linux.c \
+	src/game/version.c \
+	src/lib/cjson/cJSON.c
+NATIVE_STARTUP_OBJ_DIR := $(OUT_DIR)/native-startup-objects
+NATIVE_STARTUP_OBJS := $(patsubst %.c,$(NATIVE_STARTUP_OBJ_DIR)/%.o,$(NATIVE_STARTUP_SRCS))
 RESOURCE_FILES := $(shell find res -type f | sort)
 
 WASM_JS_LIBS := \
@@ -37,6 +82,17 @@ WASM_CFLAGS := \
 	-Iinclude \
 	-Isrc \
 	-isystem $(SOKOL_DIR)
+
+NATIVE_STARTUP_CFLAGS := \
+	$(WASM_CFLAGS) \
+	-std=gnu11 \
+	-Isrc/wasm \
+	-DUSE_MIMALLOC=0 \
+	-DSDL_FUNCTION_POINTER_IS_VOID_POINTER \
+	-DASTONIA_WASM_NATIVE_STARTUP_PREFLIGHT \
+	-Wno-error=experimental \
+	--use-port=sdl3 \
+	--use-port=libpng
 
 WASM_FLAGS := \
 	--preload-file res@/res \
@@ -77,6 +133,16 @@ resource-fs-native-check:
 	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -Wpedantic -Werror -Isrc -DASTONIA_RESOURCE_FS_CHECK_MAIN \
 		src/wasm/resource_fs_check.c -o bin/test_wasm_resource_fs_check
 	@./bin/test_wasm_resource_fs_check
+
+native-startup-objects: check-env $(NATIVE_STARTUP_OBJS)
+	@echo "Compiled $(words $(NATIVE_STARTUP_SRCS)) native startup sources as WASM objects under $(NATIVE_STARTUP_OBJ_DIR)"
+
+native-startup-source-list:
+	@printf '%s\n' $(NATIVE_STARTUP_SRCS)
+
+$(NATIVE_STARTUP_OBJ_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(EMCC) $(NATIVE_STARTUP_CFLAGS) -c -o $@ $<
 
 clean:
 	@rm -rf $(OUT_DIR)

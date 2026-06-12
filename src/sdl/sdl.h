@@ -40,8 +40,11 @@
 #define SDL_MOUM_MDOWN 6
 #define SDL_MOUM_WHEEL 7
 
+#ifndef ASTONIA_RENDERFONT_TYPEDEF
+#define ASTONIA_RENDERFONT_TYPEDEF
 struct renderfont;
 typedef struct renderfont RenderFont;
+#endif
 
 DLL_EXPORT extern int sdl_cache_size;
 DLL_EXPORT extern int sdl_scale;

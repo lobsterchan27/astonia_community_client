@@ -41,6 +41,13 @@ struct memhead {
 	uint8_t ID;
 };
 
+typedef union memhead_storage {
+	struct memhead head;
+	max_align_t alignment;
+} memhead_storage;
+
+#define ASTONIA_MEMHEAD_SIZE (sizeof(memhead_storage))
+
 // Memory allocation functions with tracking
 void *xmalloc(size_t size, uint8_t ID);
 void *xrealloc(void *ptr, size_t size, uint8_t ID);

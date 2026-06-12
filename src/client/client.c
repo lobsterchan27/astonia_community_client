@@ -29,8 +29,6 @@
 
 unsigned int display_gfx = 0;
 uint32_t display_time = 0;
-static int rec_bytes = 0;
-static int sent_bytes = 0;
 static astonia_sock *sock = NULL;
 int sockstate = 0;
 static Uint64 socktime = 0;
@@ -60,7 +58,6 @@ uint64_t tick_receive_interval = 0; // Time between server tick batch arrivals (
 static struct queue queue[Q_SIZE];
 int q_in, q_out, q_size;
 
-static size_t ticksize;
 static size_t inused;
 static size_t indone;
 int login_done;
@@ -147,7 +144,6 @@ void bzero_client(int part)
 		zsinit = 0;
 		bzero(&zs, sizeof(zs));
 
-		ticksize = 0;
 		inused = 0;
 		indone = 0;
 		login_done = 0;
@@ -415,7 +411,6 @@ int poll_network(void)
 		} else {
 			memmove(outbuf, outbuf + n, outused - (size_t)n);
 			outused -= (size_t)n;
-			sent_bytes += n;
 		}
 	}
 
@@ -436,7 +431,6 @@ int poll_network(void)
 	}
 
 	inused += (size_t)n;
-	rec_bytes += n;
 
 	int ticks_this_poll = 0;
 	while (1) {

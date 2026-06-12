@@ -2,6 +2,9 @@
  * Part of Astonia Client (c) Daniel Brockhaus. Please read license.txt.
  */
 
+#ifndef ASTONIA_H
+#define ASTONIA_H
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -202,3 +205,5 @@ char *client_version(void);
 void register_crash_handler(void);
 
 extern int sv_ver;
+
+#endif // ASTONIA_H

@@ -21,11 +21,6 @@
 #include "sdl/sdl_private.h"
 #include "game/sprite_config.h"
 
-// Module-local variables
-static int sdlm_sprite = 0;
-static int sdlm_scale = 0;
-static void *sdlm_pixel = NULL;
-
 // libpng custom allocator functions - use our MALLOC/FREE macros which switch between mimalloc and malloc
 static png_voidp png_malloc_fn(png_structp png_ptr __attribute__((unused)), png_alloc_size_t size)
 {
@@ -829,12 +824,7 @@ void sdl_make(struct sdl_texture *st, struct sdl_image *si, int preload)
 			uint16_t *flags_ptr = (uint16_t *)&st->flags;
 			__atomic_fetch_or(flags_ptr, SF_DIDALLOC, __ATOMIC_RELEASE);
 		}
-		// If already allocated, skip allocation but continue to set sdlm_* variables below
 	}
-
-	sdlm_sprite = (int)st->sprite;
-	sdlm_scale = scale;
-	sdlm_pixel = si->pixel;
 
 	if (!preload || preload == 2) {
 		if (!(flags_load(st) & SF_DIDALLOC)) {

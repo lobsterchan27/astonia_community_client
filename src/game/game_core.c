@@ -20,15 +20,12 @@
 
 // Sprite counters - shared with game_display.c
 int fsprite_cnt = 0, f2sprite_cnt = 0, gsprite_cnt = 0, g2sprite_cnt = 0, isprite_cnt = 0, csprite_cnt = 0;
-// Timing statistics - shared with game_display.c
-static Uint32 qs_time = 0;
 int dg_time = 0, ds_time = 0;
 int stom_off_x = 0, stom_off_y = 0;
 
 static DL *dllist = NULL;
 static DL **dlsort = NULL;
 static int dlused = 0, dlmax = 0;
-static int stat_dlsortcalls, stat_dlused;
 int namesize = RENDER_TEXT_SMALL;
 
 DL *dl_next(void)
@@ -113,8 +110,6 @@ int dl_qcmp(const void *ca, const void *cb)
 		DL **dv;
 	} ua, ub;
 
-	stat_dlsortcalls++;
-
 	// qsort comparator: const void* points to array elements (DL*)
 	// Use union to safely cast away const (comparator doesn't modify data)
 	ua.cv = ca;
@@ -164,16 +159,11 @@ void draw_pixel(int64_t x, int64_t y, int64_t color)
 void dl_play(void)
 {
 	int d;
-	Uint64 start;
 	void helper_cmp_dl(int attick, DL **dl, int dlused);
 
 	// helper_cmp_dl(tick,dlsort,dlused);
 
-	start = SDL_GetTicks();
-	stat_dlsortcalls = 0;
-	stat_dlused = dlused;
 	qsort(dlsort, (size_t)dlused, sizeof(DL *), dl_qcmp);
-	qs_time += SDL_GetTicks() - start;
 
 	for (d = 0; d < dlused && !quit; d++) {
 		if (dlsort[d]->call == 0) {

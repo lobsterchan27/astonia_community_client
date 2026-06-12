@@ -21,7 +21,7 @@
 #include "modder/modder.h"
 
 static int c_on = 0, c_x, c_y, d_y, ori_x, ori_y;
-static size_t csel = -1ull, isel = -1ull, msel = -1ull;
+static size_t csel = (size_t)-1, isel = (size_t)-1, msel = (size_t)-1;
 
 #define MAXLINE    20
 #define MAXLEN     120

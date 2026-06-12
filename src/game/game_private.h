@@ -75,16 +75,23 @@ typedef struct dl DL;
  * Font glyph structure for bitmap font rendering.
  * Stores run-length encoded glyph data for efficient rendering.
  */
-#ifndef HAVE_RENDERFONT
-#define HAVE_RENDERFONT
-
+#ifndef ASTONIA_RENDERFONT_STRUCT_DEFINED
+#define ASTONIA_RENDERFONT_STRUCT_DEFINED
 struct renderfont {
 	int dim; // Character width in pixels
 	unsigned char *raw; // Run-length encoded glyph bitmap data
 };
 #endif
+
+#ifndef HAVE_RENDERFONT
+#define HAVE_RENDERFONT
+#endif
+
+#ifndef ASTONIA_RENDERFONT_TYPEDEF
+#define ASTONIA_RENDERFONT_TYPEDEF
 struct renderfont;
 typedef struct renderfont RenderFont;
+#endif
 
 // Color conversion tables and palettes
 extern unsigned short rgbcolorkey;

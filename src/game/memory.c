@@ -57,7 +57,7 @@ static void update_mem_stats_add(uint8_t ID, size_t size)
 		maxmemptrs = memptrs[0];
 	}
 
-	memused += sizeof(struct memhead) + sizeof(memcheck) + size + sizeof(memcheck);
+	memused += ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + size + sizeof(memcheck);
 	memptrused++;
 }
 
@@ -68,7 +68,7 @@ static void update_mem_stats_remove(uint8_t ID, size_t size)
 	memsize[0] -= size;
 	memptrs[0] -= 1;
 
-	memused -= sizeof(struct memhead) + sizeof(memcheck) + size + sizeof(memcheck);
+	memused -= ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + size + sizeof(memcheck);
 	memptrused--;
 }
 
@@ -83,7 +83,7 @@ int xmemcheck(void *ptr)
 
 	{
 		uintptr_t ptr_val = (uintptr_t)ptr;
-		ptr_val -= sizeof(struct memhead) + sizeof(memcheck);
+		ptr_val -= ASTONIA_MEMHEAD_SIZE + sizeof(memcheck);
 		mem = (struct memhead *)ptr_val;
 	}
 
@@ -95,9 +95,9 @@ int xmemcheck(void *ptr)
 	}
 
 	// border check
-	head = ((unsigned char *)(mem)) + sizeof(struct memhead);
-	rptr = ((unsigned char *)(mem)) + sizeof(struct memhead) + sizeof(memcheck);
-	tail = ((unsigned char *)(mem)) + sizeof(struct memhead) + sizeof(memcheck) + mem->size;
+	head = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE;
+	rptr = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE + sizeof(memcheck);
+	tail = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + mem->size;
 
 	if (memcmp(head, memcheck, sizeof(memcheck))) {
 		fail("xmemcheck: ill head in %s (ptr=%p)", memname[mem->ID], (void *)rptr);
@@ -131,13 +131,13 @@ void *xmalloc(size_t size, uint8_t ID)
 
 	memptrused++;
 
-	mem = CALLOC(1, sizeof(struct memhead) + sizeof(memcheck) + size + sizeof(memcheck));
+	mem = CALLOC(1, ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + size + sizeof(memcheck));
 	if (!mem) {
 		fail("OUT OF MEMORY !!!");
 		return NULL;
 	}
 
-	memused += sizeof(struct memhead) + sizeof(memcheck) + size + sizeof(memcheck);
+	memused += ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + size + sizeof(memcheck);
 
 	if (ID >= MAX_MEM) {
 		fail("xmalloc: ill mem id");
@@ -158,9 +158,9 @@ void *xmalloc(size_t size, uint8_t ID)
 		maxmemptrs = memptrs[0];
 	}
 
-	head = ((unsigned char *)(mem)) + sizeof(struct memhead);
-	rptr = ((unsigned char *)(mem)) + sizeof(struct memhead) + sizeof(memcheck);
-	tail = ((unsigned char *)(mem)) + sizeof(struct memhead) + sizeof(memcheck) + mem->size;
+	head = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE;
+	rptr = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE + sizeof(memcheck);
+	tail = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + mem->size;
 
 	// set memcheck
 	memcpy(head, memcheck, sizeof(memcheck));
@@ -207,7 +207,7 @@ void xfree(void *ptr)
 	// get mem
 	{
 		uintptr_t ptr_val = (uintptr_t)ptr;
-		ptr_val -= sizeof(struct memhead) + sizeof(memcheck);
+		ptr_val -= ASTONIA_MEMHEAD_SIZE + sizeof(memcheck);
 		mem = (struct memhead *)ptr_val;
 	}
 
@@ -233,15 +233,15 @@ void xinfo(void *ptr)
 	// get mem
 	{
 		uintptr_t ptr_val = (uintptr_t)ptr;
-		ptr_val -= sizeof(struct memhead) + sizeof(memcheck);
+		ptr_val -= ASTONIA_MEMHEAD_SIZE + sizeof(memcheck);
 		mem = (struct memhead *)ptr_val;
 	}
 
 	printf("%zu bytes", mem->size);
 }
 
-// Verify struct size
-_Static_assert(sizeof(struct memhead) == 16, "memhead must be 16 bytes");
+_Static_assert(ASTONIA_MEMHEAD_SIZE % _Alignof(max_align_t) == 0,
+    "memhead storage must preserve allocation alignment");
 
 void *xrealloc(void *ptr, size_t size, uint8_t ID)
 {
@@ -264,7 +264,7 @@ void *xrealloc(void *ptr, size_t size, uint8_t ID)
 
 	{
 		uintptr_t ptr_val = (uintptr_t)ptr;
-		ptr_val -= sizeof(struct memhead) + sizeof(memcheck);
+		ptr_val -= ASTONIA_MEMHEAD_SIZE + sizeof(memcheck);
 		mem = (struct memhead *)ptr_val;
 	}
 
@@ -273,7 +273,7 @@ void *xrealloc(void *ptr, size_t size, uint8_t ID)
 	update_mem_stats_remove(old_ID, old_size);
 
 	// realloc
-	struct memhead *new_mem = REALLOC(mem, sizeof(struct memhead) + sizeof(memcheck) + size + sizeof(memcheck));
+	struct memhead *new_mem = REALLOC(mem, ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + size + sizeof(memcheck));
 	if (!new_mem) {
 		// Restore counters since realloc failed
 		update_mem_stats_add(old_ID, old_size);
@@ -290,9 +290,9 @@ void *xrealloc(void *ptr, size_t size, uint8_t ID)
 	mem->ID = ID; // Update ID in case it changed
 	mem->size = size;
 
-	head = ((unsigned char *)(mem)) + sizeof(struct memhead);
-	rptr = ((unsigned char *)(mem)) + sizeof(struct memhead) + sizeof(memcheck);
-	tail = ((unsigned char *)(mem)) + sizeof(struct memhead) + sizeof(memcheck) + mem->size;
+	head = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE;
+	rptr = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE + sizeof(memcheck);
+	tail = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + mem->size;
 
 	// set memcheck
 	memcpy(head, memcheck, sizeof(memcheck));
@@ -319,7 +319,7 @@ void *xrecalloc(void *ptr, size_t size, uint8_t ID)
 
 	{
 		uintptr_t ptr_val = (uintptr_t)ptr;
-		ptr_val -= sizeof(struct memhead) + sizeof(memcheck);
+		ptr_val -= ASTONIA_MEMHEAD_SIZE + sizeof(memcheck);
 		mem = (struct memhead *)ptr_val;
 	}
 
@@ -328,7 +328,7 @@ void *xrecalloc(void *ptr, size_t size, uint8_t ID)
 	update_mem_stats_remove(old_ID, old_size);
 
 	// realloc
-	struct memhead *new_mem = REALLOC(mem, sizeof(struct memhead) + sizeof(memcheck) + size + sizeof(memcheck));
+	struct memhead *new_mem = REALLOC(mem, ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + size + sizeof(memcheck));
 	if (!new_mem) {
 		// Restore counters since realloc failed
 		update_mem_stats_add(old_ID, old_size);
@@ -339,16 +339,16 @@ void *xrecalloc(void *ptr, size_t size, uint8_t ID)
 
 	if (size - old_size > 0) {
 		bzero(
-		    ((unsigned char *)(mem)) + sizeof(struct memhead) + sizeof(memcheck) + old_size, (size_t)(size - old_size));
+		    ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + old_size, (size_t)(size - old_size));
 	}
 
 	update_mem_stats_add(ID, size);
 	mem->ID = ID; // Update ID in case it changed
 	mem->size = size;
 
-	head = ((unsigned char *)(mem)) + sizeof(struct memhead);
-	rptr = ((unsigned char *)(mem)) + sizeof(struct memhead) + sizeof(memcheck);
-	tail = ((unsigned char *)(mem)) + sizeof(struct memhead) + sizeof(memcheck) + mem->size;
+	head = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE;
+	rptr = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE + sizeof(memcheck);
+	tail = ((unsigned char *)(mem)) + ASTONIA_MEMHEAD_SIZE + sizeof(memcheck) + mem->size;
 
 	// set memcheck
 	memcpy(head, memcheck, sizeof(memcheck));

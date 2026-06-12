@@ -123,8 +123,11 @@ DLL_EXPORT int render_text_break_length(int x, int y, int breakx, unsigned short
 int render_text_char(int sx, int sy, int c, unsigned short int color);
 int render_char_len(char c);
 void render_dump(FILE *fp);
+#ifndef ASTONIA_RENDERFONT_TYPEDEF
+#define ASTONIA_RENDERFONT_TYPEDEF
 struct renderfont;
 typedef struct renderfont RenderFont;
+#endif
 int render_create_font_png(RenderFont *dst, uint32_t *pixel, int dx, int dy, int yoff, int scale);
 
 // Sprite rendering functions
