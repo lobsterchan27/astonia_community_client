@@ -18,6 +18,7 @@ WASM_SRCS := \
 	src/wasm/astonia_smoke_observability.c \
 	src/wasm/astonia_net_wasm.c \
 	src/wasm/sokol_sdl_renderer.c \
+	src/sdl/sdl_state.c \
 	src/render_backend/sokol_webgpu_backend.c \
 	src/render_backend/sokol_webgpu_sokol.c
 
@@ -44,6 +45,7 @@ NATIVE_STARTUP_SRCS := \
 	src/game/sprite_config.c \
 	src/game/memory.c \
 	src/modder/modder.c \
+	src/sdl/sdl_state.c \
 	src/sdl/sdl_core.c \
 	src/sdl/sdl_texture.c \
 	src/sdl/sdl_image.c \
@@ -71,13 +73,14 @@ WASM_JS_LIBS := \
 	src/wasm/astonia_net_jslib.js
 
 WASM_CFLAGS := \
-	-std=c99 \
+	-std=c11 \
 	-O2 \
 	-Wall \
 	-Wextra \
 	-Wpedantic \
 	-Werror \
 	-DNDEBUG \
+	-DUSE_MIMALLOC=0 \
 	-DSOKOL_WGPU \
 	-Iinclude \
 	-Isrc \
@@ -102,7 +105,7 @@ WASM_FLAGS := \
 	-sMODULARIZE=1 \
 	-sEXPORT_ES6=1 \
 	-sEXPORT_NAME=createAstoniaClientModule \
-	-sEXPORTED_FUNCTIONS=_astonia_resource_fs_check,_astonia_resource_fs_expected_count,_astonia_smoke_login_done,_astonia_smoke_sockstate,_astonia_smoke_protocol_version,_astonia_smoke_tick,_astonia_smoke_queued_ticks,_astonia_smoke_queue_size \
+	-sEXPORTED_FUNCTIONS=_astonia_resource_fs_check,_astonia_resource_fs_expected_count,_astonia_smoke_login_done,_astonia_smoke_sockstate,_astonia_smoke_protocol_version,_astonia_smoke_tick,_astonia_smoke_queued_ticks,_astonia_smoke_queue_size,_astonia_wasm_native_state_check,_astonia_wasm_native_state_probe_sprite \
 	-sALLOW_MEMORY_GROWTH=1 \
 	-sMAXIMUM_MEMORY=1GB \
 	-sNO_EXIT_RUNTIME=1
@@ -110,7 +113,7 @@ WASM_FLAGS := \
 all: check-env $(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA)
 
 $(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA) &: $(WASM_SRCS) $(WASM_JS_LIBS) src/wasm/astonia_smoke_observability.h \
-		src/render_backend/render_backend.h src/render_backend/sokol_webgpu_backend.h \
+		src/render_backend/render_backend.h src/render_backend/sokol_webgpu_backend.h src/sdl/sdl_state.h \
 		$(SOKOL_DIR)/sokol_app.h $(SOKOL_DIR)/sokol_gfx.h $(SOKOL_DIR)/sokol_glue.h $(SOKOL_DIR)/sokol_log.h \
 		$(RESOURCE_FILES)
 	@mkdir -p $(OUT_DIR)
@@ -133,6 +136,9 @@ resource-fs-native-check:
 	$(HOST_CC) -std=c99 -O2 -Wall -Wextra -Wpedantic -Werror -Isrc -DASTONIA_RESOURCE_FS_CHECK_MAIN \
 		src/wasm/resource_fs_check.c -o bin/test_wasm_resource_fs_check
 	@./bin/test_wasm_resource_fs_check
+	$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -DUSE_MIMALLOC=0 -Isrc \
+		tests/test_wasm_sdl_native_state.c src/sdl/sdl_state.c -o bin/test_wasm_sdl_native_state
+	@./bin/test_wasm_sdl_native_state
 
 native-startup-objects: check-env $(NATIVE_STARTUP_OBJS)
 	@echo "Compiled $(words $(NATIVE_STARTUP_SRCS)) native startup sources as WASM objects under $(NATIVE_STARTUP_OBJ_DIR)"
@@ -148,4 +154,4 @@ clean:
 	@rm -rf $(OUT_DIR)
 	@mkdir -p $(OUT_DIR)
 	@printf '*\n!.gitignore\n' > $(OUT_DIR)/.gitignore
-	@rm -f bin/test_renderer_backend_contract bin/test_wasm_resource_fs_check
+	@rm -f bin/test_renderer_backend_contract bin/test_wasm_resource_fs_check bin/test_wasm_sdl_native_state

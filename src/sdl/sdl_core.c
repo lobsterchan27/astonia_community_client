@@ -46,23 +46,12 @@ SDL_Mutex *premutex = NULL;
 MIX_Mixer *sdl_mixer = NULL;
 MIX_Track *sdl_tracks[MAX_SOUND_CHANNELS] = {NULL};
 
-// Scale and resolution settings
-DLL_EXPORT int sdl_scale = 1;
-DLL_EXPORT int sdl_frames = 0;
-DLL_EXPORT int sdl_multi = 4;
-DLL_EXPORT int sdl_cache_size = 8000;
-DLL_EXPORT int __yres = YRES0;
-
 // Worker thread management
 
 struct zip_handles;
 struct zip_handles *worker_zips = NULL;
 SDL_AtomicInt worker_quit;
 SDL_Thread **worker_threads = NULL;
-
-// Image loading state machine (shared with sdl_image.c)
-static int sdli_state_storage[MAXSPRITE];
-int *sdli_state = sdli_state_storage;
 
 void sdl_dump(FILE *fp)
 {
@@ -85,16 +74,13 @@ void sdl_dump(FILE *fp)
 	fprintf(fp, "\n");
 }
 
-#define GO_DEFAULTS (GO_CONTEXT | GO_ACTION | GO_BIGBAR | GO_PREDICT | GO_SHORT | GO_MAPSAVE)
-
-// #define GO_DEFAULTS (GO_CONTEXT|GO_ACTION|GO_BIGBAR|GO_PREDICT|GO_SHORT|GO_MAPSAVE|GO_NOMAP)
-
 int sdl_init(int width, int height, char *title, int monitor)
 {
-	int i;
 	int num_displays;
 	SDL_DisplayID *displays;
 	SDL_DisplayID display_id;
+	int render_offset_x = 0;
+	int render_offset_y = 0;
 
 	if (!SDL_Init(SDL_INIT_VIDEO | ((game_options & GO_SOUND) ? SDL_INIT_AUDIO : 0))) {
 		fail("SDL_Init Error: %s", SDL_GetError());
@@ -213,29 +199,7 @@ int sdl_init(int width, int height, char *title, int monitor)
 
 	SDL_SetRenderVSync(sdlren, 1);
 
-	// Initialize hash table (statically allocated)
-	for (i = 0; i < MAX_TEXHASH; i++) {
-		sdlt_cache[i] = STX_NONE;
-	}
-
-	// Initialize texture cache (statically allocated)
-	for (i = 0; i < MAX_TEXCACHE; i++) {
-		// Initialize flags atomically
-		uint16_t *flags_ptr = (uint16_t *)&sdlt[i].flags;
-		__atomic_store_n(flags_ptr, 0, __ATOMIC_RELAXED);
-		sdlt[i].prev = i - 1;
-		sdlt[i].next = i + 1;
-		sdlt[i].hnext = STX_NONE;
-		sdlt[i].hprev = STX_NONE;
-		// Initialize new fields:
-		// Generation starts at 1 (0 is reserved for "never valid for jobs")
-		sdlt[i].generation = 1;
-		sdlt[i].work_state = TX_WORK_IDLE;
-	}
-	sdlt[0].prev = STX_NONE;
-	sdlt[MAX_TEXCACHE - 1].next = STX_NONE;
-	sdlt_best = 0;
-	sdlt_last = MAX_TEXCACHE - 1;
+	sdl_native_state_reset_cache();
 
 	// Initialize the new texture job queue
 	tex_jobs_init();
@@ -266,72 +230,8 @@ int sdl_init(int width, int height, char *title, int monitor)
 	}
 #endif
 
-	// decide on screen format
-	if (width != XRES || height != YRES) {
-		int tmp_scale = 1, off = 0;
-
-		// Check 4:3 aspect ratio (YRES0=600)
-		if (width / XRES >= 4 && height / YRES0 >= 4) {
-			sdl_scale = 4;
-		} else if (width / XRES >= 3 && height / YRES0 >= 3) {
-			sdl_scale = 3;
-		} else if (width / XRES >= 2 && height / YRES0 >= 2) {
-			sdl_scale = 2;
-		}
-
-		// Check 16:10 aspect ratio (YRES2=500)
-		if (width / XRES >= 4 && height / YRES2 >= 4) {
-			tmp_scale = 4;
-		} else if (width / XRES >= 3 && height / YRES2 >= 3) {
-			tmp_scale = 3;
-		} else if (width / XRES >= 2 && height / YRES2 >= 2) {
-			tmp_scale = 2;
-		}
-
-		if (tmp_scale > sdl_scale || height < YRES0) {
-			sdl_scale = tmp_scale;
-			YRES = height / sdl_scale;
-		}
-
-		// Check 16:9 widescreen aspect ratio (YRES3=450) - most permissive
-		tmp_scale = 1;
-		if (width / XRES >= 4 && height / YRES3 >= 4) {
-			tmp_scale = 4;
-		} else if (width / XRES >= 3 && height / YRES3 >= 3) {
-			tmp_scale = 3;
-		} else if (width / XRES >= 2 && height / YRES3 >= 2) {
-			tmp_scale = 2;
-		}
-
-		if (tmp_scale > sdl_scale) {
-			sdl_scale = tmp_scale;
-			YRES = height / sdl_scale;
-		}
-
-		YRES = height / sdl_scale;
-
-		if (game_options & GO_SMALLTOP) {
-			off += 40;
-		}
-		if (game_options & GO_SMALLBOT) {
-			off += 40;
-		}
-
-		if (YRES > YRES1 - off) {
-			YRES = YRES1 - off;
-		}
-
-		render_set_offset((width / sdl_scale - XRES) / 2, (height / sdl_scale - YRES) / 2);
-	}
-	if (game_options & GO_NOTSET) {
-		if (YRES >= 620) {
-			game_options = GO_DEFAULTS;
-		} else if (YRES >= 580) {
-			game_options = GO_DEFAULTS | GO_SMALLBOT;
-		} else {
-			game_options = GO_DEFAULTS | GO_SMALLBOT | GO_SMALLTOP;
-		}
-	}
+	sdl_native_state_configure_frame(width, height, &render_offset_x, &render_offset_y);
+	render_set_offset(render_offset_x, render_offset_y);
 	note("SDL using %dx%d scale %d, options=%" PRIu64, XRES, YRES, sdl_scale, game_options);
 
 	// Let SDL3 use its default rendering behavior
@@ -623,21 +523,27 @@ void sdl_exit(void)
 
 	if (sdl_zip1) {
 		zip_close(sdl_zip1);
+		sdl_zip1 = NULL;
 	}
 	if (sdl_zip1m) {
 		zip_close(sdl_zip1m);
+		sdl_zip1m = NULL;
 	}
 	if (sdl_zip1p) {
 		zip_close(sdl_zip1p);
+		sdl_zip1p = NULL;
 	}
 	if (sdl_zip2) {
 		zip_close(sdl_zip2);
+		sdl_zip2 = NULL;
 	}
 	if (sdl_zip2m) {
 		zip_close(sdl_zip2m);
+		sdl_zip2m = NULL;
 	}
 	if (sdl_zip2p) {
 		zip_close(sdl_zip2p);
+		sdl_zip2p = NULL;
 	}
 
 	if (prework) {

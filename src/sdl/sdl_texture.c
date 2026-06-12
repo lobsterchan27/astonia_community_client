@@ -22,44 +22,10 @@
 extern int sockstate; // Declare early for use in wait logging
 #endif
 
-// Texture cache data (statically allocated)
-struct sdl_texture sdlt[MAX_TEXCACHE];
-int sdlt_best, sdlt_last;
-int sdlt_cache[MAX_TEXHASH];
-
-// Image cache
-static struct sdl_image sdli_storage[MAXSPRITE];
-struct sdl_image *sdli = sdli_storage;
-
-// New texture job queue
-texture_job_queue_t g_tex_jobs;
-
-// Statistics
-int texc_used = 0;
-long long mem_png = 0;
-long long mem_tex = 0;
-long long texc_hit = 0, texc_miss = 0, texc_pre = 0;
-
 #ifdef DEVELOPER
 uint64_t sdl_render_wait = 0;
 uint64_t sdl_render_wait_count = 0;
 #endif
-
-// Timing
-long long sdl_time_preload = 0;
-long long sdl_time_make = 0;
-long long sdl_time_make_main = 0;
-long long sdl_time_load = 0;
-long long sdl_time_alloc = 0;
-long long sdl_time_tex = 0;
-long long sdl_time_tex_main = 0;
-long long sdl_time_text = 0;
-long long sdl_time_blit = 0;
-long long sdl_time_pre1 = 0;
-long long sdl_time_pre2 = 0;
-long long sdl_time_pre3 = 0;
-
-int maxpanic = 0;
 
 // ============================================================================
 // New texture job queue implementation

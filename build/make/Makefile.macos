@@ -108,7 +108,7 @@ OBJS	=		src/gui/gui_core.o src/gui/gui_input.o src/gui/gui_display.o src/gui/gui
 			src/game/render.o src/game/font.o src/game/main.o src/game/sprite.o src/game/sprite_config.o\
 			src/game/memory.o src/game/version.o\
 			src/modder/modder.o\
-			src/sdl/sdl_core.o src/sdl/sdl_texture.o src/sdl/sdl_image.o src/sdl/sdl_effects.o src/sdl/sdl_draw.o src/sdl/sound.o\
+			src/sdl/sdl_state.o src/sdl/sdl_core.o src/sdl/sdl_texture.o src/sdl/sdl_image.o src/sdl/sdl_effects.o src/sdl/sdl_draw.o src/sdl/sound.o\
 			src/helper/helper.o\
 			src/gui/dots.o src/gui/display.o src/gui/teleport.o src/gui/color.o src/gui/cmd.o\
 			src/gui/questlog.o src/gui/context.o src/gui/hover.o src/gui/minimap.o\
@@ -182,6 +182,7 @@ src/game/game_lighting.o:	src/game/game_lighting.c src/astonia.h src/game/game.h
 src/game/version.o:	src/game/version.c
 
 # Refactored SDL modules
+src/sdl/sdl_state.o:	src/sdl/sdl_state.c src/astonia.h src/sdl/sdl.h src/sdl/sdl_state.h
 src/sdl/sdl_core.o:	src/sdl/sdl_core.c src/astonia.h src/sdl/sdl.h src/sdl/sdl_private.h src/client/client.h src/gui/gui.h src/modder/modder.h
 src/sdl/sdl_texture.o:	src/sdl/sdl_texture.c src/astonia.h src/sdl/sdl.h src/sdl/sdl_private.h
 src/sdl/sdl_image.o:	src/sdl/sdl_image.c src/astonia.h src/sdl/sdl.h src/sdl/sdl_private.h src/game/game.h

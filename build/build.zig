@@ -76,6 +76,7 @@ pub fn build(b: *std.Build) void {
         "src/modder/modder.c",
 
         // SDL layer
+        "src/sdl/sdl_state.c",
         "src/sdl/sdl_core.c",
         "src/sdl/sdl_texture.c",
         "src/sdl/sdl_image.c",

@@ -28,6 +28,7 @@ endif
 # SDL source files needed for testing
 # Note: We use REAL I/O (sdl_image.c included) and only stub GPU operations
 SDL_SRCS = ../src/sdl/sdl_test.c \
+           ../src/sdl/sdl_state.c \
            ../src/sdl/sdl_core.c \
            ../src/sdl/sdl_texture.c \
            ../src/sdl/sdl_image.c \
