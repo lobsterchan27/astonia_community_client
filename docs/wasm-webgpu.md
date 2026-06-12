@@ -1,7 +1,7 @@
 # WASM/WebGPU Browser Target
 
-The browser target is the native Astonia client compiled to WASM with a WebGPU
-renderer. Browser-hosted logic is limited to platform integration.
+The browser target is the native Astonia client compiled to WASM with a Sokol
+WebGPU renderer. Browser-hosted logic is limited to platform integration.
 
 ## Boundary
 
@@ -37,9 +37,10 @@ The C client remains authoritative for protocol, simulation, input, and drawing.
    Provide `astonia_net_*` symbols for WASM that use a WebSocket to the gateway
    and keep the existing byte protocol unchanged.
 
-4. WebGPU renderer backend.
-   Implement the existing client render surface for the WASM build with WebGPU.
-   Desktop SDL remains a native platform backend, not the browser renderer.
+4. Sokol WebGPU renderer backend.
+   Implement the existing client render surface for the WASM build with
+   Sokol's WebGPU backend. Desktop SDL3 remains a native platform backend, not
+   the browser renderer.
 
 5. Asset filesystem.
    Package `res/` for the WASM module so native code opens the same paths it

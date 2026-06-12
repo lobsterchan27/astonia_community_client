@@ -101,9 +101,9 @@ make build-sdl3 build-sdl3-mixer
 
 ### Browser WASM/WebGPU
 
-The browser target is the native client compiled to WASM with a WebGPU renderer.
-The browser code under `browser/` only hosts the generated native module from
-`browser/dist/`.
+The browser target is the native client compiled to WASM with a Sokol WebGPU
+renderer. The browser code under `browser/` only hosts the generated native
+module from `browser/dist/`.
 
 Check the local toolchain:
 

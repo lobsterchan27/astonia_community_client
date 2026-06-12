@@ -17,7 +17,7 @@ WASM_FLAGS := \
 all: check-env
 	@mkdir -p $(OUT_DIR)
 	@echo "WASM/WebGPU build target is intentionally not wired to any alternate browser renderer."
-	@echo "Next required slice: compile native client sources with a WebGPU renderer backend and browser astonia_net shim."
+	@echo "Next required slice: compile native client sources with a Sokol WebGPU renderer backend and browser astonia_net shim."
 	@echo "Expected output: $(TARGET_JS)"
 	@exit 2
 
