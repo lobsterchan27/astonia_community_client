@@ -205,6 +205,9 @@ export class AstoniaLiveSession extends EventTarget {
       this.#emitChange();
       this.#scheduleBufferedReplay();
     } catch (error) {
+      if (!this.#isOpenSocket(socket)) {
+        return;
+      }
       this.#fail(error, socket);
     }
   }

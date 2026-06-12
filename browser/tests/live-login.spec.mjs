@@ -874,3 +874,114 @@ test('live session ignores decoded ticks that finish after the gateway closes', 
     activeTimerCount: 0
   });
 });
+
+test('live session ignores decoder failures that finish after the gateway closes', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const { AstoniaLiveSession } = await import('/src/live-session.js');
+    let socket;
+    let rejectDecode;
+    let decodeStarted = false;
+    const decodePromise = new Promise((resolve, reject) => {
+      rejectDecode = reject;
+    });
+
+    async function waitFor(predicate) {
+      const startedAt = Date.now();
+      while (!predicate()) {
+        if (Date.now() - startedAt > 1000) {
+          throw new Error('Timed out waiting for condition');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    class ManualWebSocket extends EventTarget {
+      static CLOSING = 2;
+
+      constructor() {
+        super();
+        this.binaryType = '';
+        this.readyState = 1;
+      }
+
+      send() {}
+
+      close() {
+        this.readyState = 3;
+        this.dispatchEvent(new CloseEvent('close', { code: 1000 }));
+      }
+
+      receive(bytes) {
+        this.dispatchEvent(new MessageEvent('message', { data: Uint8Array.from(bytes).buffer }));
+      }
+    }
+
+    const session = new AstoniaLiveSession({
+      decoderFactory: () => ({
+        async pushChunk() {
+          decodeStarted = true;
+          return decodePromise;
+        }
+      }),
+      replayFactory: () => ({
+        replayTick() {},
+        snapshot() {
+          return {
+            login: { done: false, doneCount: 0 },
+            visibleWorld: { cells: [], characters: [] },
+            commands: {
+              modeled: { total: 0, byCommand: {} },
+              skipped: { total: 0, byCommand: {} }
+            }
+          };
+        }
+      }),
+      webSocketFactory: () => {
+        socket = new ManualWebSocket();
+        return socket;
+      }
+    });
+
+    session.connect({
+      gatewayUrl: 'ws://close-before-decode-error.gateway.test',
+      username: 'FixtureCapture',
+      password: 'fixturecapture'
+    });
+    socket.dispatchEvent(new Event('open'));
+    socket.receive([1, 2, 3]);
+    await waitFor(() => decodeStarted);
+
+    socket.close();
+    const afterClose = {
+      status: session.state.status,
+      statusDetail: session.state.statusDetail,
+      decodedTicks: session.state.decodedTicks
+    };
+
+    rejectDecode(new Error('decode failed after close'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    return {
+      afterClose,
+      afterReject: {
+        status: session.state.status,
+        statusDetail: session.state.statusDetail,
+        decodedTicks: session.state.decodedTicks
+      }
+    };
+  });
+
+  expect(result.afterClose).toEqual({
+    status: 'closed-before-ticks',
+    statusDetail: 'Gateway WebSocket closed.',
+    decodedTicks: 0
+  });
+  expect(result.afterReject).toEqual({
+    status: 'closed-before-ticks',
+    statusDetail: 'Gateway WebSocket closed.',
+    decodedTicks: 0
+  });
+});
