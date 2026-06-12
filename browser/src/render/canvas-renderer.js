@@ -25,6 +25,10 @@ export async function renderAstoniaRenderListToCanvas(canvas, renderList, option
   context.fillStyle = '#111416';
   context.fillRect(0, 0, width, height);
 
+  for (const command of renderList.commands) {
+    drawFallback(context, command);
+  }
+
   const spriteResolution = options.spriteAssets
     ? await decodeRenderListSprites(renderList, options.spriteAssets, {
         maxSprites: options.maxDecodedSprites ?? MAX_DECODED_SPRITES
@@ -33,17 +37,16 @@ export async function renderAstoniaRenderListToCanvas(canvas, renderList, option
   const imageCache = new Map();
 
   for (const command of renderList.commands) {
-    drawFallback(context, command);
     const sprite = spriteResolution.decodedSprites.get(command.spriteId);
     if (sprite) {
-      const bitmap = imageCache.get(sprite.spriteId) ?? spriteToImageBitmap(sprite);
-      imageCache.set(sprite.spriteId, bitmap);
-      context.drawImage(bitmap, Math.round(command.screen.x - bitmap.width / 2), Math.round(command.screen.y - bitmap.height + 10));
+      const image = imageCache.get(sprite.spriteId) ?? spriteToCanvasSource(sprite);
+      imageCache.set(sprite.spriteId, image);
+      context.drawImage(image, Math.round(command.screen.x - image.width / 2), Math.round(command.screen.y - image.height + 10));
     }
   }
 
-  for (const bitmap of imageCache.values()) {
-    bitmap.close?.();
+  for (const image of imageCache.values()) {
+    image.close?.();
   }
 
   return {
@@ -74,12 +77,17 @@ function drawFallback(context, command) {
   context.fill();
 }
 
-function spriteToImageBitmap(sprite) {
+function spriteToCanvasSource(sprite) {
   const imageData = new ImageData(new Uint8ClampedArray(sprite.pixels), sprite.width, sprite.height);
-  const canvas = new OffscreenCanvas(sprite.width, sprite.height);
+  const canvas =
+    typeof OffscreenCanvas === 'function'
+      ? new OffscreenCanvas(sprite.width, sprite.height)
+      : document.createElement('canvas');
+  canvas.width = sprite.width;
+  canvas.height = sprite.height;
   const context = canvas.getContext('2d');
   context.putImageData(imageData, 0, 0);
-  return canvas.transferToImageBitmap();
+  return typeof canvas.transferToImageBitmap === 'function' ? canvas.transferToImageBitmap() : canvas;
 }
 
 function emptySpriteResolution() {

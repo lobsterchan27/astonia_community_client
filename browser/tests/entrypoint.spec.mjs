@@ -23,6 +23,15 @@ test('browser entrypoint loads without console or runtime errors', async ({ page
   expect(failures).toEqual([]);
 });
 
+test('browser login form defaults to the current host gateway and smoke account', async ({ page }) => {
+  await page.goto('/');
+
+  const expectedGateway = await page.evaluate(() => `ws://${window.location.hostname}:8787`);
+  await expect(page.locator('input[name="gateway"]')).toHaveValue(expectedGateway);
+  await expect(page.locator('input[name="username"]')).toHaveValue('BrowserSmoke');
+  await expect(page.locator('input[name="password"]')).toHaveValue('fixturecapture');
+});
+
 test('browser shell reports WebGPU capability or fallback status', async ({ page }) => {
   const failures = collectBrowserFailures(page);
   const status = page.getByTestId('webgpu-status');

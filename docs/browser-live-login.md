@@ -47,13 +47,14 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/`, keep the gateway as
-`ws://127.0.0.1:8787`, enter a disposable local character and password, and
-press `Connect`. For fixture-compatible local servers the default form account
-is:
+Open `http://127.0.0.1:5173/`, enter a disposable local character and password,
+and press `Connect`. The form defaults the gateway to `ws://<current-host>:8787`,
+so opening the dev server over Tailscale will also default the gateway to the
+same Tailscale host. For the disposable smoke server used by this workflow, the
+default form account is:
 
 ```text
-username/character: FixtureCapture
+username/character: BrowserSmoke
 password: fixturecapture
 ```
 

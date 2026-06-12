@@ -244,6 +244,104 @@ test('render list sprites decode through the existing asset catalog where availa
   ]);
 });
 
+test('2d canvas renderer keeps fallback pixels visible while sprite decode is pending', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const { renderAstoniaRenderListToCanvas } = await import('/src/render/canvas-renderer.js');
+    const canvas = document.createElement('canvas');
+    document.body.append(canvas);
+    let releaseSprite;
+    const pendingSprite = new Promise((resolve) => {
+      releaseSprite = resolve;
+    });
+    const renderList = {
+      schemaVersion: 1,
+      viewport: {
+        canvasWidth: 96,
+        canvasHeight: 96,
+        tileWidth: 40,
+        tileHeight: 20
+      },
+      commands: [
+        {
+          id: 'ground:0,0:12008',
+          type: 'sprite',
+          layer: 'ground',
+          spriteId: 12_008,
+          local: { x: 0, y: 0 },
+          world: { x: 126, y: 179 },
+          screen: { x: 48, y: 48 },
+          fallbackColor: '#31583d'
+        }
+      ]
+    };
+    const renderPromise = renderAstoniaRenderListToCanvas(canvas, renderList, {
+      spriteAssets: {
+        hasSprite: () => true,
+        decodeSprite: () => pendingSprite
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const pendingPixels = sampleCanvas(canvas);
+
+    releaseSprite({
+      spriteId: 12_008,
+      entryName: '00012008.png',
+      archiveName: 'test.zip',
+      width: 1,
+      height: 1,
+      pixels: new Uint8ClampedArray([255, 0, 0, 255])
+    });
+    const renderResult = await renderPromise;
+    const finalPixels = sampleCanvas(canvas);
+
+    return {
+      pendingPixels,
+      finalPixels,
+      renderResult
+    };
+
+    function sampleCanvas(target) {
+      const context = target.getContext('2d');
+      const data = context.getImageData(0, 0, target.width, target.height).data;
+      let background = 0;
+      let fallback = 0;
+      let red = 0;
+
+      for (let index = 0; index < data.length; index += 4) {
+        const r = data[index];
+        const g = data[index + 1];
+        const b = data[index + 2];
+        const a = data[index + 3];
+        if (r === 17 && g === 20 && b === 22 && a === 255) {
+          background += 1;
+        }
+        if (r === 49 && g === 88 && b === 61 && a === 255) {
+          fallback += 1;
+        }
+        if (r === 255 && g === 0 && b === 0 && a === 255) {
+          red += 1;
+        }
+      }
+
+      return { background, fallback, red };
+    }
+  });
+
+  expect(result.pendingPixels.fallback).toBeGreaterThan(100);
+  expect(result.pendingPixels.background).toBeGreaterThan(100);
+  expect(result.pendingPixels.red).toBe(0);
+  expect(result.finalPixels.fallback).toBeGreaterThan(100);
+  expect(result.finalPixels.red).toBe(1);
+  expect(result.renderResult).toMatchObject({
+    status: 'rendered',
+    decodedSprites: 1,
+    missingSprites: 0
+  });
+});
+
 test('WebGPU render tracer reports an explicit skip when GPU access is unavailable', async ({ page }) => {
   await page.goto('/');
 

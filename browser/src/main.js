@@ -178,13 +178,23 @@ async function updateLiveView(state) {
 }
 
 function hydrateFormFromUrl() {
+  const defaults = {
+    gateway: defaultGatewayUrl(),
+    username: 'BrowserSmoke',
+    password: 'fixturecapture'
+  };
+
   for (const name of ['gateway', 'username', 'password']) {
     const value = urlParams.get(name);
-    if (value !== null) {
-      liveForm.elements[name].value = value;
-    }
+    liveForm.elements[name].value = value ?? defaults[name];
   }
   movementPredictionToggle.checked = liveSession.state.movementPrediction?.enabled !== false;
+}
+
+function defaultGatewayUrl() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const hostname = window.location.hostname || '127.0.0.1';
+  return `${protocol}//${hostname}:8787`;
 }
 
 function getSpriteAssets() {

@@ -73,6 +73,36 @@ test('browser asset loader decodes selected gx1.zip PNG sprites to RGBA pixels',
   ]);
 });
 
+test('browser asset loader caches decoded sprite pixels', async ({ page }) => {
+  await page.goto('/');
+
+  const cacheResult = await page.evaluate(async () => {
+    const { loadSpriteAssets } = await import('/src/assets/sprite-assets.js');
+    const assets = await loadSpriteAssets({
+      baseArchives: ['gx1.zip'],
+      optionalArchives: []
+    });
+    const [first, second] = await Promise.all([assets.decodeSprite(0), assets.decodeSprite(0)]);
+    const third = await assets.decodeSprite(0);
+
+    return {
+      sameConcurrentObject: first === second,
+      sameLaterObject: first === third,
+      samePixelBuffer: first.pixels === third.pixels,
+      spriteId: third.spriteId,
+      pixelByteLength: third.pixels.byteLength
+    };
+  });
+
+  expect(cacheResult).toEqual({
+    sameConcurrentObject: true,
+    sameLaterObject: true,
+    samePixelBuffer: true,
+    spriteId: 0,
+    pixelByteLength: 40 * 19 * 4
+  });
+});
+
 test('browser asset loader treats missing patch and mod zips as optional overlays', async ({ page }) => {
   await page.goto('/');
 

@@ -44,12 +44,14 @@ class SpriteAssetCatalog {
   constructor({ archives, missingOptionalArchives }) {
     this.#archives = archives;
     this.#archivesByName = new Map(archives.map((archive) => [archive.name, archive]));
+    this.#decodedSprites = new Map();
     this.archiveNames = Object.freeze(archives.map((archive) => archive.name));
     this.missingOptionalArchives = Object.freeze(missingOptionalArchives.slice());
   }
 
   #archives;
   #archivesByName;
+  #decodedSprites;
 
   listEntries(archiveName) {
     if (archiveName) {
@@ -81,17 +83,21 @@ class SpriteAssetCatalog {
   }
 
   async decodeSprite(spriteId) {
-    const sprite = await this.readSprite(spriteId);
-    const decoded = await decodePngToRgba(sprite.bytes);
+    const entryName = spriteEntryName(spriteId);
+    const cached = this.#decodedSprites.get(entryName);
+    if (cached) {
+      return cached;
+    }
 
-    return {
-      spriteId: sprite.spriteId,
-      entryName: sprite.entryName,
-      archiveName: sprite.archiveName,
-      width: decoded.width,
-      height: decoded.height,
-      pixels: decoded.pixels
-    };
+    const pending = this.#decodeSprite(spriteId);
+    this.#decodedSprites.set(entryName, pending);
+
+    try {
+      return await pending;
+    } catch (error) {
+      this.#decodedSprites.delete(entryName);
+      throw error;
+    }
   }
 
   #getArchive(name) {
@@ -112,6 +118,20 @@ class SpriteAssetCatalog {
     }
 
     return null;
+  }
+
+  async #decodeSprite(spriteId) {
+    const sprite = await this.readSprite(spriteId);
+    const decoded = await decodePngToRgba(sprite.bytes);
+
+    return {
+      spriteId: sprite.spriteId,
+      entryName: sprite.entryName,
+      archiveName: sprite.archiveName,
+      width: decoded.width,
+      height: decoded.height,
+      pixels: decoded.pixels
+    };
   }
 }
 
