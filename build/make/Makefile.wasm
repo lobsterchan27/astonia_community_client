@@ -12,15 +12,59 @@ EMCC ?= $(if $(wildcard $(LOCAL_EMCC)),$(LOCAL_EMCC),emcc)
 HOST_CC ?= clang
 
 SOKOL_DIR := third_party/sokol
-WASM_SRCS := \
+WASM_PLATFORM_SRCS := \
 	src/wasm/sokol_webgpu_harness.c \
 	src/wasm/resource_fs_check.c \
 	src/wasm/astonia_smoke_observability.c \
 	src/wasm/astonia_net_wasm.c \
+	src/wasm/wasm_platform_shell.c \
+	src/wasm/wasm_audio_shell.c \
+	src/wasm/wasm_zip_shell.c \
 	src/wasm/sokol_sdl_renderer.c \
-	src/sdl/sdl_state.c \
 	src/render_backend/sokol_webgpu_backend.c \
 	src/render_backend/sokol_webgpu_sokol.c
+
+WASM_NATIVE_CLIENT_SRCS := \
+	src/gui/gui_core.c \
+	src/gui/gui_input.c \
+	src/gui/gui_display.c \
+	src/gui/gui_inventory.c \
+	src/gui/gui_buttons.c \
+	src/gui/gui_map.c \
+	src/client/client.c \
+	src/client/protocol.c \
+	src/client/skill.c \
+	src/game/game_core.c \
+	src/game/game_effects.c \
+	src/game/game_lighting.c \
+	src/game/game_display.c \
+	src/game/render.c \
+	src/game/font.c \
+	src/game/main.c \
+	src/game/sprite.c \
+	src/game/sprite_config.c \
+	src/game/memory.c \
+	src/modder/modder.c \
+	src/sdl/sdl_state.c \
+	src/sdl/sdl_texture.c \
+	src/sdl/sdl_image.c \
+	src/sdl/sdl_effects.c \
+	src/sdl/sdl_draw.c \
+	src/helper/helper.c \
+	src/gui/dots.c \
+	src/gui/display.c \
+	src/gui/teleport.c \
+	src/gui/color.c \
+	src/gui/cmd.c \
+	src/gui/questlog.c \
+	src/gui/context.c \
+	src/gui/hover.c \
+	src/gui/minimap.c \
+	src/game/memory_linux.c \
+	src/game/version.c \
+	src/lib/cjson/cJSON.c
+
+WASM_SRCS := $(WASM_PLATFORM_SRCS) $(WASM_NATIVE_CLIENT_SRCS)
 
 # Derived from build/make/Makefile.linux OBJS. This is a compile-only
 # preflight for the native client startup graph, not a browser final link.
@@ -73,17 +117,23 @@ WASM_JS_LIBS := \
 	src/wasm/astonia_net_jslib.js
 
 WASM_CFLAGS := \
-	-std=c11 \
+	-std=gnu11 \
 	-O2 \
 	-Wall \
 	-Wextra \
 	-Wpedantic \
 	-Werror \
+	-Wno-error=experimental \
 	-DNDEBUG \
 	-DUSE_MIMALLOC=0 \
 	-DSOKOL_WGPU \
+	-DSDL_MAIN_HANDLED \
+	-DSDL_FUNCTION_POINTER_IS_VOID_POINTER \
+	-DASTONIA_NO_DESKTOP_MAIN \
+	-DASTONIA_SMOKE_OBSERVABILITY_EXTERNAL_STATE \
 	-Iinclude \
 	-Isrc \
+	-Isrc/wasm \
 	-isystem $(SOKOL_DIR)
 
 NATIVE_STARTUP_CFLAGS := \
@@ -101,11 +151,13 @@ WASM_FLAGS := \
 	--preload-file res@/res \
 	$(foreach lib,$(WASM_JS_LIBS),--js-library $(lib)) \
 	--use-port=emdawnwebgpu \
+	--use-port=sdl3 \
+	--use-port=libpng \
 	-sENVIRONMENT=web \
 	-sMODULARIZE=1 \
 	-sEXPORT_ES6=1 \
 	-sEXPORT_NAME=createAstoniaClientModule \
-	-sEXPORTED_FUNCTIONS=_astonia_resource_fs_check,_astonia_resource_fs_expected_count,_astonia_smoke_login_done,_astonia_smoke_sockstate,_astonia_smoke_protocol_version,_astonia_smoke_tick,_astonia_smoke_queued_ticks,_astonia_smoke_queue_size,_astonia_wasm_native_state_check,_astonia_wasm_native_state_probe_sprite \
+	-sEXPORTED_FUNCTIONS=_astonia_resource_fs_check,_astonia_resource_fs_expected_count,_astonia_smoke_login_done,_astonia_smoke_sockstate,_astonia_smoke_protocol_version,_astonia_smoke_tick,_astonia_smoke_queued_ticks,_astonia_smoke_queue_size,_astonia_wasm_native_state_check,_astonia_wasm_native_state_probe_sprite,_astonia_native_client_startup,_astonia_native_client_run,_astonia_native_client_shutdown,_main_loop_init,_main_loop_step,_main_loop_shutdown \
 	-sALLOW_MEMORY_GROWTH=1 \
 	-sMAXIMUM_MEMORY=1GB \
 	-sNO_EXIT_RUNTIME=1
@@ -113,6 +165,7 @@ WASM_FLAGS := \
 all: check-env $(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA)
 
 $(TARGET_JS) $(TARGET_WASM) $(TARGET_DATA) &: $(WASM_SRCS) $(WASM_JS_LIBS) src/wasm/astonia_smoke_observability.h \
+		src/wasm/wasm_platform_shell.h src/wasm/zip.h src/wasm/SDL3_mixer/SDL_mixer.h \
 		src/render_backend/render_backend.h src/render_backend/sokol_webgpu_backend.h src/sdl/sdl_state.h \
 		$(SOKOL_DIR)/sokol_app.h $(SOKOL_DIR)/sokol_gfx.h $(SOKOL_DIR)/sokol_glue.h $(SOKOL_DIR)/sokol_log.h \
 		$(RESOURCE_FILES)

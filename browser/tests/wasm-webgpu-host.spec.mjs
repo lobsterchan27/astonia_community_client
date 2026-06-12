@@ -354,6 +354,41 @@ test('generated native module exposes smoke observability getters', async ({ pag
 	expect(failures).toEqual([]);
 });
 
+test('generated native module exports native lifecycle entry points', async ({ page }) => {
+	if (!existsSync(distModulePath)) {
+		test.skip(true, 'native WASM module has not been built');
+	}
+
+	const failures = collectBrowserFailures(page);
+	await page.goto('/');
+
+	const missing = await page.evaluate(async () => {
+		const imported = await import(`/dist/astonia-client.js?t=${Date.now()}`);
+		const createModule = imported.default ?? imported.createAstoniaClientModule;
+		const module = await createModule({
+			noInitialRun: true,
+			canvas: document.querySelector('[data-testid="wasm-client-canvas"]'),
+			locateFile(path) {
+				return `/dist/${path}`;
+			}
+		});
+
+		const lifecycleExports = [
+			'_astonia_native_client_startup',
+			'_astonia_native_client_run',
+			'_astonia_native_client_shutdown',
+			'_main_loop_init',
+			'_main_loop_step',
+			'_main_loop_shutdown'
+		];
+
+		return lifecycleExports.filter((name) => typeof module[name] !== 'function');
+	});
+
+	expect(missing).toEqual([]);
+	expect(failures).toEqual([]);
+});
+
 test('browser package only contains the WASM/WebGPU host source', () => {
 	expect(sourceFilesUnder('src')).toEqual(['src/main.js', 'src/styles.css']);
 });

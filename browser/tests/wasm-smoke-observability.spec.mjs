@@ -142,7 +142,7 @@ test.describe('WASM smoke observability harness', () => {
   });
 });
 
-test('production WASM export list contains only smoke getters', () => {
+test('production WASM export list contains smoke getters without smoke mutators', () => {
   const makefile = readFileSync(resolve(repoRoot, 'build/make/Makefile.wasm'), 'utf8');
 
   for (const [, exportName] of smokeGetters) {

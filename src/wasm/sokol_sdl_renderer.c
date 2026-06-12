@@ -14,6 +14,7 @@
 #include "render_backend/sokol_webgpu_backend.h"
 #include "sdl/sdl.h"
 #include "sdl/sdl_state.h"
+#include "wasm/wasm_platform_shell.h"
 
 DLL_EXPORT uint64_t game_options __attribute__((weak)) = GO_NOTSET;
 
@@ -22,7 +23,7 @@ static bool g_frame_open;
 
 int sdl_init(int width, int height, char *title, int monitor)
 {
-	if (!sdl_native_state_init(width, height)) {
+	if (!astonia_wasm_platform_shell_init(width, height)) {
 		return 0;
 	}
 
@@ -30,11 +31,10 @@ int sdl_init(int width, int height, char *title, int monitor)
 	g_frame_open = false;
 	sdl_frames = 0;
 	if (!g_renderer->init(width, height, title, monitor)) {
-		sdl_native_state_shutdown();
 		g_renderer = 0;
+		astonia_wasm_platform_shell_shutdown();
 		return 0;
 	}
-
 	return 1;
 }
 
@@ -49,7 +49,7 @@ void sdl_exit(void)
 		g_renderer->shutdown();
 	}
 	g_renderer = 0;
-	sdl_native_state_shutdown();
+	astonia_wasm_platform_shell_shutdown();
 }
 
 int sdl_clear(void)
