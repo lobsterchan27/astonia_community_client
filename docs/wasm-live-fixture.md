@@ -1,8 +1,8 @@
 # WASM Live Fixture
 
-This fixture is the repeatable local setup for a future WASM browser live
-smoke. It starts the newer disposable server, starts the WebSocket gateway, and
-documents credentials. It does not implement the final browser smoke.
+This fixture is the repeatable local setup for the WASM browser live smoke. It
+starts the newer disposable server, starts the WebSocket gateway, and documents
+credentials.
 
 The smoke path remains a byte pipe:
 
@@ -123,8 +123,19 @@ npm install
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-This issue does not add an automated live browser smoke. The fixture only makes
-the server, gateway, and credential setup explicit for that future test.
+Run the gated responsiveness smoke against the disposable server and gateway:
+
+```bash
+cd browser
+ASTONIA_LIVE_SMOKE=1 \
+ASTONIA_EMSDK_ROOT=/home/bfan/astonia_community_client/.deps/emsdk \
+npm test -- tests/wasm-live-smoke.spec.mjs
+```
+
+The smoke launches the generated native WASM/Sokol module through the browser
+host, connects through the gateway URL in the form, and keeps probing browser
+evaluation, DOM writes, timer ticks, and native frame counters for at least 25
+seconds. JSON summaries are written under `.worktree/smoke`.
 
 ## Fixed Ports
 

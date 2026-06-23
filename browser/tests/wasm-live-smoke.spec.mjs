@@ -9,6 +9,17 @@ const distModulePath = resolve(browserRoot, 'dist/astonia-client.js');
 const smokeArtifactDir = resolve(repoRoot, '.worktree/smoke');
 const smokeSamplePrefix = '[live-smoke-native-sample]';
 const launchProbePrefix = '[DEBUG-wasm-launch-probe]';
+const responsivenessProbePrefix = '[live-smoke-responsiveness-ping]';
+const responsivenessDurationMs = Math.max(
+  20_000,
+  Number.parseInt(process.env.ASTONIA_LIVE_SMOKE_RESPONSIVENESS_MS ?? '25000', 10)
+);
+const responsivenessPingIntervalMs = 500;
+const responsivenessEvalTimeoutMs = 2_000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function installMockWebGpu(page) {
   await page.addInitScript(() => {
@@ -151,6 +162,67 @@ async function installMockWebGpu(page) {
   });
 }
 
+async function installResponsivenessProbe(page) {
+  await page.addInitScript(() => {
+    const NativeWebSocket = window.WebSocket;
+
+    window.astoniaSmokeWebSocketUrls = [];
+    window.WebSocket = new Proxy(NativeWebSocket, {
+      construct(Target, args) {
+        window.astoniaSmokeWebSocketUrls.push(String(args[0]));
+        return Reflect.construct(Target, args);
+      }
+    });
+
+    window.astoniaResponsivenessProbe = {
+      intervalMs: 100,
+      startedAt: performance.now(),
+      timerTickCount: 0,
+      timerTicks: [],
+      domValues: [],
+      nativeSamples: []
+    };
+
+    window.astoniaResponsivenessProbe.timer = window.setInterval(() => {
+      const probe = window.astoniaResponsivenessProbe;
+      const now = performance.now();
+      const previous = probe.timerTicks.at(-1);
+      probe.timerTickCount++;
+      const tick = {
+        count: probe.timerTickCount,
+        elapsedMs: Number((now - probe.startedAt).toFixed(3)),
+        deltaMs: previous ? Number((now - previous.now).toFixed(3)) : 0,
+        now
+      };
+      probe.timerTicks.push(tick);
+      if (probe.timerTicks.length > 500) {
+        probe.timerTicks.shift();
+      }
+
+      const value = String(tick.count);
+      document.documentElement.dataset.astoniaResponsivenessTick = value;
+      probe.domValues.push({ value, elapsedMs: tick.elapsedMs });
+      if (probe.domValues.length > 500) {
+        probe.domValues.shift();
+      }
+
+      const module = window.astoniaNativeModule;
+      if (typeof module?._astonia_native_startup_adapter_frame_count === 'function') {
+        probe.nativeSamples.push({
+          elapsedMs: tick.elapsedMs,
+          frameCount: module._astonia_native_startup_adapter_frame_count(),
+          stepCount: module._astonia_native_startup_adapter_step_count?.(),
+          adapterStatus: module._astonia_native_startup_adapter_status?.(),
+          tick: module._astonia_smoke_tick?.()
+        });
+        if (probe.nativeSamples.length > 500) {
+          probe.nativeSamples.shift();
+        }
+      }
+    }, window.astoniaResponsivenessProbe.intervalMs);
+  });
+}
+
 function parseConsoleJson(text, prefix) {
   if (!text.includes(prefix)) {
     return null;
@@ -168,18 +240,114 @@ function sampleHasInitialServerData(sample) {
   return sample.loginDone > 0 || sample.protocolVersion > 0 || sample.tick > 0 || sample.queueSize > 0;
 }
 
+function sampleNativeProgress(page) {
+  return page.evaluate(() => {
+    const module = window.astoniaNativeModule;
+    if (typeof module?._astonia_native_startup_adapter_frame_count !== 'function') {
+      return null;
+    }
+
+    return {
+      elapsedMs: Number(performance.now().toFixed(3)),
+      adapterStatus: module._astonia_native_startup_adapter_status(),
+      frameCount: module._astonia_native_startup_adapter_frame_count(),
+      stepCount: module._astonia_native_startup_adapter_step_count?.(),
+      smokeTick: module._astonia_smoke_tick?.(),
+      webSocketUrls: window.astoniaSmokeWebSocketUrls ?? []
+    };
+  });
+}
+
+async function evaluateWithTimeout(page, fn, arg, timeoutMs, label) {
+  let timeout;
+  try {
+    return await Promise.race([
+      page.evaluate(fn, arg),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      })
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function proveBrowserResponsiveness(page, durationMs) {
+  const startedAt = Date.now();
+  const deadline = startedAt + durationMs;
+  const pings = [];
+  let lastTimerTickCount = 0;
+
+  while (Date.now() < deadline) {
+    const pingStartedAt = Date.now();
+    const ping = await evaluateWithTimeout(
+      page,
+      (sequence) => {
+        const probe = window.astoniaResponsivenessProbe;
+        const lastTimerTick = probe?.timerTicks.at(-1) ?? null;
+        const previousTimerTick = probe?.timerTicks.at(-2) ?? null;
+        const marker = `eval-${sequence}`;
+        document.body.dataset.astoniaResponsivenessEval = marker;
+
+        return {
+          sequence,
+          elapsedMs: Number((performance.now() - probe.startedAt).toFixed(3)),
+          marker,
+          domMarker: document.body.dataset.astoniaResponsivenessEval,
+          domTick: document.documentElement.dataset.astoniaResponsivenessTick ?? null,
+          timerTickCount: probe.timerTickCount,
+          lastTimerDeltaMs: lastTimerTick?.deltaMs ?? null,
+          previousTimerDeltaMs: previousTimerTick?.deltaMs ?? null,
+          nativeSampleCount: probe.nativeSamples.length,
+          latestNativeSample: probe.nativeSamples.at(-1) ?? null
+        };
+      },
+      pings.length + 1,
+      responsivenessEvalTimeoutMs,
+      'browser responsiveness eval probe'
+    );
+
+    pings.push({
+      ...ping,
+      roundTripMs: Date.now() - pingStartedAt,
+      wallElapsedMs: Date.now() - startedAt
+    });
+
+    if (ping.domMarker !== ping.marker) {
+      throw new Error(`DOM responsiveness marker did not round-trip for ${ping.marker}`);
+    }
+
+    if (ping.timerTickCount <= lastTimerTickCount) {
+      throw new Error(`browser timer probe did not advance after ping ${ping.sequence}`);
+    }
+    lastTimerTickCount = ping.timerTickCount;
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs > 0) {
+      await sleep(Math.min(responsivenessPingIntervalMs, remainingMs));
+    }
+  }
+
+  return pings;
+}
+
 test.describe('WASM browser live smoke', () => {
   test.skip(process.env.ASTONIA_LIVE_SMOKE !== '1', 'set ASTONIA_LIVE_SMOKE=1 to run the disposable live server smoke');
   test.skip(!existsSync(distModulePath), 'native WASM module has not been built');
 
-  test('launches generated native client through gateway and observes initial C state', async ({ page }, testInfo) => {
-    test.setTimeout(20_000);
+  test('keeps the browser responsive while generated native frames advance through the gateway', async ({ page }, testInfo) => {
+    test.setTimeout(responsivenessDurationMs + 25_000);
     mkdirSync(smokeArtifactDir, { recursive: true });
     const artifactPrefix = resolve(smokeArtifactDir, `live-smoke-${Date.now()}`);
+    const gatewayUrl = process.env.ASTONIA_LIVE_GATEWAY_URL ?? 'ws://127.0.0.1:8787';
     const consoleMessages = [];
     const pageErrors = [];
     const samples = [];
     const launchEvents = [];
+    let responsivenessPings = [];
+    let progressStart = null;
+    let progressEnd = null;
+    let webSocketUrls = [];
     let observedInitialData;
     let resolveInitialData;
     const initialDataPromise = new Promise((resolve) => {
@@ -207,6 +375,7 @@ test.describe('WASM browser live smoke', () => {
     page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error?.message || error)));
 
     await installMockWebGpu(page);
+    await installResponsivenessProbe(page);
     await page.goto('/?astonia_probe=1');
     await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'ready');
 
@@ -249,7 +418,7 @@ test.describe('WASM browser live smoke', () => {
       }, 100);
     }, smokeSamplePrefix);
 
-    await page.locator('input[name="gateway"]').fill(process.env.ASTONIA_LIVE_GATEWAY_URL ?? 'ws://127.0.0.1:8787');
+    await page.locator('input[name="gateway"]').fill(gatewayUrl);
     await page.locator('input[name="username"]').fill(process.env.ASTONIA_LIVE_USERNAME ?? 'BrowserSmoke');
     await page.locator('input[name="password"]').fill(process.env.ASTONIA_LIVE_PASSWORD ?? 'fixturecapture');
     await page.getByRole('button', { name: 'Launch' }).click();
@@ -261,10 +430,22 @@ test.describe('WASM browser live smoke', () => {
           throw new Error('timed out waiting for native C initial server data');
         })
       ]);
+
+      progressStart = await sampleNativeProgress(page);
+      webSocketUrls = progressStart?.webSocketUrls ?? [];
+      responsivenessPings = await proveBrowserResponsiveness(page, responsivenessDurationMs);
+      progressEnd = await sampleNativeProgress(page);
+      webSocketUrls = await page.evaluate(() => window.astoniaSmokeWebSocketUrls ?? []);
     } finally {
       const summary = {
         artifactPrefix,
+        gatewayUrl,
+        responsivenessDurationMs,
         observedInitialData,
+        progressStart,
+        progressEnd,
+        responsivenessPings,
+        webSocketUrls,
         samples,
         launchEvents,
         consoleMessages,
@@ -288,6 +469,26 @@ test.describe('WASM browser live smoke', () => {
     expect(sampleHasInitialServerData(observedInitialData)).toBe(true);
     expect(launchEvents.map((event) => event.stage)).toEqual(
       expect.arrayContaining(['create-module-start', 'create-module-resolved', 'running'])
+    );
+    expect(launchEvents.some((event) => event.detail?.arguments?.includes(gatewayUrl))).toBe(true);
+    expect(webSocketUrls.some((url) => url.startsWith(gatewayUrl))).toBe(true);
+    expect(progressStart).toBeTruthy();
+    expect(progressEnd).toBeTruthy();
+    expect(progressEnd.frameCount).toBeGreaterThan(progressStart.frameCount);
+    expect(progressEnd.stepCount).toBeGreaterThan(progressStart.stepCount);
+    expect(progressEnd.adapterStatus).toBe(2);
+    expect(responsivenessPings.length).toBeGreaterThanOrEqual(Math.floor(responsivenessDurationMs / responsivenessPingIntervalMs) - 1);
+    expect(responsivenessPings.at(-1).wallElapsedMs).toBeGreaterThanOrEqual(responsivenessDurationMs - responsivenessPingIntervalMs);
+    expect(Math.max(...responsivenessPings.map((ping) => ping.roundTripMs))).toBeLessThan(responsivenessEvalTimeoutMs);
+    console.info(
+      responsivenessProbePrefix,
+      JSON.stringify({
+        durationMs: responsivenessPings.at(-1)?.wallElapsedMs ?? 0,
+        pings: responsivenessPings.length,
+        frameDelta: progressEnd.frameCount - progressStart.frameCount,
+        stepDelta: progressEnd.stepCount - progressStart.stepCount,
+        webSocketUrls
+      })
     );
   });
 });
