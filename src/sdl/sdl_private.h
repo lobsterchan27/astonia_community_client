@@ -18,6 +18,10 @@
 #define SDL_USE_RENDER_BACKEND_TEXTURES 1
 #endif
 
+#if defined(__EMSCRIPTEN__) || defined(ASTONIA_TEXTURE_FRAME_BUDGET_FOR_TEST)
+#define SDL_TEXTURE_FRAME_BUDGET_ASYNC 1
+#endif
+
 #ifndef ASTONIA_RENDERFONT_STRUCT_DEFINED
 #define ASTONIA_RENDERFONT_STRUCT_DEFINED
 struct renderfont {
@@ -42,6 +46,7 @@ struct zip_handles {
 };
 
 int sdl_ic_load(unsigned int sprite, struct zip_handles *zips);
+#define SDL_IMAGE_LOAD_BUSY (-2)
 int sdl_pre_backgnd(void *ptr);
 int sdl_create_cursors(void);
 SDL_Cursor *sdl_create_cursor(char *filename);
@@ -114,6 +119,9 @@ int sdl_tx_load(unsigned int sprite, signed char sink, unsigned char freeze, uns
 void tex_jobs_init(void);
 void tex_jobs_shutdown(void);
 int tex_jobs_pop(texture_job_t *out_job, int should_block);
+int sdl_texture_queue_cache_index(int cache_index);
+int sdl_texture_process_one_queued_job(void);
+SdlTextureFrameProgress sdl_texture_advance_frame_budget(int max_cpu_jobs, int max_gpu_uploads, uint32_t max_ms);
 
 #ifdef DEVELOPER
 void sdl_dump_spritecache(void);
@@ -130,6 +138,14 @@ int sdl_load_image_png(struct sdl_image *si, char *filename, zip_t *zip, int smo
 int do_smoothify(int sprite);
 int sdl_load_image(struct sdl_image *si, int sprite, struct zip_handles *zips);
 int sdl_ic_load(unsigned int sprite, struct zip_handles *zips);
+
+typedef struct sdl_texture_make_state {
+	int next_y;
+} SdlTextureMakeState;
+
+int sdl_ic_load_frame_budget_step(unsigned int sprite, struct zip_handles *zips, uint64_t deadline_ticks);
+int sdl_make_stage12_frame_budget_step(
+    struct sdl_texture *st, struct sdl_image *si, SdlTextureMakeState *state, uint64_t deadline_ticks);
 void sdl_make(struct sdl_texture *st, struct sdl_image *si, int preload);
 
 // ============================================================================
@@ -172,6 +188,18 @@ static inline int sdl_backend_argb8888_pitch_is_valid(int width, size_t pitch_by
 
 SDL_Texture *sdl_backend_create_texture_from_argb8888(
     int width, int height, const uint32_t *pixels, size_t pitch_bytes);
+
+typedef struct sdl_backend_texture_upload_state {
+	void *texture;
+	uint8_t *row_rgba;
+	int width;
+	int height;
+	int next_y;
+} SdlBackendTextureUploadState;
+
+int sdl_backend_upload_texture_argb8888_frame_budget_step(SdlBackendTextureUploadState *state, int width, int height,
+    const uint32_t *pixels, size_t pitch_bytes, uint64_t deadline_ticks, SDL_Texture **out_texture);
+void sdl_backend_upload_texture_argb8888_dispose(SdlBackendTextureUploadState *state);
 void sdl_backend_destroy_texture(SDL_Texture *texture);
 int sdl_backend_get_texture_size(SDL_Texture *texture, float *width, float *height);
 int sdl_backend_set_texture_alpha(SDL_Texture *texture, uint8_t alpha);

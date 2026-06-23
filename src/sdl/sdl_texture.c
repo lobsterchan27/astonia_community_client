@@ -30,12 +30,53 @@ uint64_t sdl_render_wait_count = 0;
 #ifdef __EMSCRIPTEN__
 extern int astonia_wasm_texture_job_queue_count;
 extern int astonia_wasm_texture_job_queue_peak;
+extern int astonia_wasm_texture_job_enqueue_count;
+extern int astonia_wasm_texture_job_drop_count;
+extern int astonia_wasm_texture_cpu_work_count;
 
 static void astonia_wasm_note_texture_job_queue(void)
 {
 	astonia_wasm_texture_job_queue_count = g_tex_jobs.count;
 	if (g_tex_jobs.count > astonia_wasm_texture_job_queue_peak) {
 		astonia_wasm_texture_job_queue_peak = g_tex_jobs.count;
+	}
+}
+#endif
+
+extern SDL_Semaphore *prework;
+
+static int texture_frame_budget_async_enabled(void)
+{
+#ifdef SDL_TEXTURE_FRAME_BUDGET_ASYNC
+	return 1;
+#else
+	return 0;
+#endif
+}
+
+#ifdef SDL_TEXTURE_FRAME_BUDGET_ASYNC
+typedef struct texture_cpu_frame_work {
+	int active;
+	texture_job_t job;
+	SdlTextureMakeState make_state;
+} TextureCpuFrameWork;
+
+static TextureCpuFrameWork g_texture_cpu_frame_work;
+static SdlBackendTextureUploadState g_texture_upload_work[MAX_TEXCACHE];
+
+static void texture_frame_budget_dispose_upload(int cache_index)
+{
+	if (cache_index < 0 || cache_index >= MAX_TEXCACHE) {
+		return;
+	}
+	sdl_backend_upload_texture_argb8888_dispose(&g_texture_upload_work[cache_index]);
+}
+
+static void texture_frame_budget_reset_work(void)
+{
+	memset(&g_texture_cpu_frame_work, 0, sizeof(g_texture_cpu_frame_work));
+	for (int i = 0; i < MAX_TEXCACHE; i++) {
+		texture_frame_budget_dispose_upload(i);
 	}
 }
 #endif
@@ -57,6 +98,9 @@ void tex_jobs_init(void)
 
 void tex_jobs_shutdown(void)
 {
+#ifdef SDL_TEXTURE_FRAME_BUDGET_ASYNC
+	texture_frame_budget_reset_work();
+#endif
 	if (g_tex_jobs.mutex) {
 		SDL_DestroyMutex(g_tex_jobs.mutex);
 		g_tex_jobs.mutex = NULL;
@@ -106,6 +150,363 @@ int tex_jobs_pop(texture_job_t *out_job, int should_block)
 
 	SDL_UnlockMutex(q->mutex);
 	return 1;
+}
+
+static int tex_jobs_depth_snapshot(void)
+{
+	int depth;
+
+	if (!g_tex_jobs.mutex) {
+		return 0;
+	}
+
+	SDL_LockMutex(g_tex_jobs.mutex);
+	depth = g_tex_jobs.count;
+	SDL_UnlockMutex(g_tex_jobs.mutex);
+	return depth;
+}
+
+int sdl_texture_queue_cache_index(int cache_index)
+{
+	struct sdl_texture *slot;
+	texture_job_t *job;
+	uint16_t flags;
+
+	if (cache_index < 0 || cache_index >= MAX_TEXCACHE || !g_tex_jobs.mutex || !g_tex_jobs.cond) {
+		return 0;
+	}
+
+	slot = &sdlt[cache_index];
+	flags = flags_load(slot);
+	if (!(flags & SF_SPRITE) || (flags & SF_DIDMAKE)) {
+		return 0;
+	}
+
+	SDL_LockMutex(g_tex_jobs.mutex);
+	flags = flags_load(slot);
+	if (!(flags & SF_SPRITE) || (flags & SF_DIDMAKE) || work_state_load(slot) != TX_WORK_IDLE) {
+		SDL_UnlockMutex(g_tex_jobs.mutex);
+		return 0;
+	}
+	if (g_tex_jobs.count >= TEX_JOB_CAPACITY) {
+#ifdef __EMSCRIPTEN__
+		astonia_wasm_texture_job_drop_count++;
+		astonia_wasm_note_texture_job_queue();
+#endif
+		SDL_UnlockMutex(g_tex_jobs.mutex);
+		return 0;
+	}
+
+	job = &g_tex_jobs.jobs[g_tex_jobs.tail];
+	job->cache_index = cache_index;
+	job->generation = slot->generation;
+	job->kind = TEXTURE_JOB_MAKE_STAGES_1_2;
+
+	g_tex_jobs.tail = (g_tex_jobs.tail + 1) % TEX_JOB_CAPACITY;
+	g_tex_jobs.count++;
+	work_state_store(slot, TX_WORK_QUEUED);
+#ifdef __EMSCRIPTEN__
+	astonia_wasm_texture_job_enqueue_count++;
+	astonia_wasm_note_texture_job_queue();
+#endif
+
+	SDL_SignalCondition(g_tex_jobs.cond);
+	SDL_UnlockMutex(g_tex_jobs.mutex);
+
+	if (sdl_multi && prework) {
+		SDL_SignalSemaphore(prework);
+	}
+
+	return 1;
+}
+
+static void texture_job_finish(struct sdl_texture *tex, uint32_t generation)
+{
+	if (!g_tex_jobs.mutex) {
+		return;
+	}
+
+	SDL_LockMutex(g_tex_jobs.mutex);
+	if (tex->generation == generation) {
+		work_state_store(tex, TX_WORK_IDLE);
+	}
+	SDL_UnlockMutex(g_tex_jobs.mutex);
+}
+
+#ifdef SDL_TEXTURE_FRAME_BUDGET_ASYNC
+static int texture_cpu_frame_work_start(void)
+{
+	texture_job_t job;
+	struct sdl_texture *tex;
+
+	if (g_texture_cpu_frame_work.active) {
+		return 1;
+	}
+	if (!tex_jobs_pop(&job, 0)) {
+		return 0;
+	}
+
+	tex = &sdlt[job.cache_index];
+	SDL_LockMutex(g_tex_jobs.mutex);
+	if (tex->generation != job.generation) {
+		SDL_UnlockMutex(g_tex_jobs.mutex);
+		return 1;
+	}
+	work_state_store(tex, TX_WORK_IN_WORKER);
+	SDL_UnlockMutex(g_tex_jobs.mutex);
+
+	memset(&g_texture_cpu_frame_work, 0, sizeof(g_texture_cpu_frame_work));
+	g_texture_cpu_frame_work.active = 1;
+	g_texture_cpu_frame_work.job = job;
+	return 1;
+}
+
+static int texture_cpu_frame_work_step(uint64_t deadline_ticks, int *completed)
+{
+	struct sdl_texture *tex;
+	unsigned int sprite;
+	int load_result;
+	int make_result;
+
+	*completed = 0;
+	if (!texture_cpu_frame_work_start()) {
+		return 0;
+	}
+
+	tex = &sdlt[g_texture_cpu_frame_work.job.cache_index];
+	if (tex->generation != g_texture_cpu_frame_work.job.generation) {
+		memset(&g_texture_cpu_frame_work, 0, sizeof(g_texture_cpu_frame_work));
+		return 1;
+	}
+
+	sprite = tex->sprite;
+	load_result = sdl_ic_load_frame_budget_step(sprite, NULL, deadline_ticks);
+	if (load_result == SDL_IMAGE_LOAD_BUSY) {
+		return 1;
+	}
+	if (load_result < 0) {
+		texture_job_finish(tex, g_texture_cpu_frame_work.job.generation);
+		memset(&g_texture_cpu_frame_work, 0, sizeof(g_texture_cpu_frame_work));
+		*completed = 1;
+		return 1;
+	}
+	if (tex->generation != g_texture_cpu_frame_work.job.generation) {
+		memset(&g_texture_cpu_frame_work, 0, sizeof(g_texture_cpu_frame_work));
+		return 1;
+	}
+
+	make_result = sdl_make_stage12_frame_budget_step(
+	    tex, &sdli[sprite], &g_texture_cpu_frame_work.make_state, deadline_ticks);
+	if (make_result < 0) {
+		texture_job_finish(tex, g_texture_cpu_frame_work.job.generation);
+		memset(&g_texture_cpu_frame_work, 0, sizeof(g_texture_cpu_frame_work));
+		*completed = 1;
+		return 1;
+	}
+	if (make_result == 0) {
+		return 1;
+	}
+
+	texture_job_finish(tex, g_texture_cpu_frame_work.job.generation);
+#ifdef __EMSCRIPTEN__
+	astonia_wasm_texture_cpu_work_count++;
+#endif
+	memset(&g_texture_cpu_frame_work, 0, sizeof(g_texture_cpu_frame_work));
+	*completed = 1;
+	return 1;
+}
+#endif
+
+int sdl_texture_process_one_queued_job(void)
+{
+#ifdef SDL_TEXTURE_FRAME_BUDGET_ASYNC
+	int completed = 0;
+	return texture_cpu_frame_work_step(SDL_GetTicks(), &completed);
+#else
+	texture_job_t job;
+	struct sdl_texture *tex;
+	unsigned int sprite;
+	int load_result;
+
+	if (!g_tex_jobs.mutex || !g_tex_jobs.cond) {
+		return 0;
+	}
+
+	if (!tex_jobs_pop(&job, 0)) {
+		return 0;
+	}
+
+	tex = &sdlt[job.cache_index];
+
+	SDL_LockMutex(g_tex_jobs.mutex);
+	if (tex->generation != job.generation) {
+		SDL_UnlockMutex(g_tex_jobs.mutex);
+		return 0;
+	}
+	work_state_store(tex, TX_WORK_IN_WORKER);
+	SDL_UnlockMutex(g_tex_jobs.mutex);
+
+	sprite = tex->sprite;
+	load_result = sdl_ic_load(sprite, NULL);
+	if (load_result < 0) {
+		texture_job_finish(tex, job.generation);
+		return load_result == SDL_IMAGE_LOAD_BUSY ? 0 : 1;
+	}
+
+	if (tex->generation != job.generation) {
+		return 0;
+	}
+	if (!(flags_load(tex) & SF_DIDALLOC)) {
+		sdl_make(tex, &sdli[sprite], 1);
+	}
+	if (tex->generation != job.generation) {
+		return 0;
+	}
+	if ((flags_load(tex) & SF_DIDALLOC) && !(flags_load(tex) & SF_DIDMAKE)) {
+		sdl_make(tex, &sdli[sprite], 2);
+	}
+
+	texture_job_finish(tex, job.generation);
+#ifdef __EMSCRIPTEN__
+	astonia_wasm_texture_cpu_work_count++;
+#endif
+	return 1;
+#endif
+}
+
+static int texture_ready_without_texture_count(void)
+{
+	int count = 0;
+
+	for (int i = 0; i < MAX_TEXCACHE; i++) {
+		uint16_t flags = flags_load(&sdlt[i]);
+		if ((flags & SF_SPRITE) && (flags & SF_DIDMAKE) && !(flags & SF_DIDTEX)) {
+			count++;
+		}
+	}
+
+	return count;
+}
+
+static int texture_upload_ready_one(int *scan_cursor, uint64_t deadline_ticks, int *completed)
+{
+	int start = *scan_cursor;
+
+	*completed = 0;
+	for (int checked = 0; checked < MAX_TEXCACHE; checked++) {
+		int cache_index = (start + checked) % MAX_TEXCACHE;
+		struct sdl_texture *slot = &sdlt[cache_index];
+		uint16_t flags = flags_load(slot);
+
+		if ((flags & SF_SPRITE) && (flags & SF_DIDMAKE) && !(flags & SF_DIDTEX)) {
+			unsigned int sprite = slot->sprite;
+
+#ifdef SDL_TEXTURE_FRAME_BUDGET_ASYNC
+			(void)sprite;
+			SDL_Texture *texture = NULL;
+			int result;
+			result = sdl_backend_upload_texture_argb8888_frame_budget_step(&g_texture_upload_work[cache_index],
+			    slot->xres * sdl_scale, slot->yres * sdl_scale, slot->pixel,
+			    (size_t)slot->xres * sizeof(uint32_t) * (size_t)sdl_scale, deadline_ticks, &texture);
+			if (result < 0) {
+				warn("Renderer texture upload failed in sprite %d (%s, %d,%d)", slot->sprite, slot->text, slot->xres,
+				    slot->yres);
+				*scan_cursor = (cache_index + 1) % MAX_TEXCACHE;
+				return 1;
+			}
+			if (result == 0) {
+				*scan_cursor = cache_index;
+				return 1;
+			}
+
+			extern long long mem_tex;
+			__atomic_add_fetch(&mem_tex, slot->xres * slot->yres * sizeof(uint32_t), __ATOMIC_RELAXED);
+#ifdef SDL_FAST_MALLOC
+			FREE(slot->pixel);
+#else
+			xfree(slot->pixel);
+#endif
+			slot->pixel = NULL;
+			slot->tex = texture;
+			if (texture) {
+				uint16_t *flags_ptr = (uint16_t *)&slot->flags;
+				__atomic_fetch_or(flags_ptr, SF_DIDTEX, __ATOMIC_RELEASE);
+			}
+#else
+			sdl_make(slot, &sdli[sprite], 3);
+#endif
+			*scan_cursor = (cache_index + 1) % MAX_TEXCACHE;
+			*completed = 1;
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static int texture_frame_budget_expired(uint64_t start, int max_ms)
+{
+	if (max_ms <= 0) {
+		return 0;
+	}
+	return SDL_GetTicks() - start >= (uint64_t)max_ms;
+}
+
+SdlTextureFrameProgress sdl_texture_advance_frame_budget(int max_cpu_jobs, int max_gpu_uploads, uint32_t max_ms)
+{
+	static int upload_scan_cursor;
+	SdlTextureFrameProgress progress;
+	uint64_t start;
+	uint64_t deadline;
+
+	memset(&progress, 0, sizeof(progress));
+
+	if (max_cpu_jobs < 0) {
+		max_cpu_jobs = 0;
+	}
+	if (max_gpu_uploads < 0) {
+		max_gpu_uploads = 0;
+	}
+
+	start = SDL_GetTicks();
+	deadline = max_ms > 0 ? start + (uint64_t)max_ms : 0;
+
+	if (!sdl_multi) {
+		while (progress.cpu_jobs < max_cpu_jobs && !texture_frame_budget_expired(start, (int)max_ms)) {
+			int completed = 0;
+#ifdef SDL_TEXTURE_FRAME_BUDGET_ASYNC
+			if (!texture_cpu_frame_work_step(deadline, &completed)) {
+				break;
+			}
+#else
+			if (!sdl_texture_process_one_queued_job()) {
+				break;
+			}
+			completed = 1;
+#endif
+			if (completed) {
+				progress.cpu_jobs++;
+			} else {
+				break;
+			}
+		}
+	}
+
+	while (progress.gpu_uploads < max_gpu_uploads && !texture_frame_budget_expired(start, (int)max_ms)) {
+		int completed = 0;
+		if (!texture_upload_ready_one(&upload_scan_cursor, deadline, &completed)) {
+			break;
+		}
+		if (completed) {
+			progress.gpu_uploads++;
+		} else {
+			break;
+		}
+	}
+
+	progress.queue_depth = tex_jobs_depth_snapshot();
+	progress.ready_without_texture = texture_ready_without_texture_count();
+	return progress;
 }
 
 // ============================================================================
@@ -549,8 +950,9 @@ static int tex_entry_build_text(int cache_index, const struct tex_request *r, in
 static int tex_entry_build_sprite(int cache_index, const struct tex_request *r, int hash)
 {
 	int ntx;
+	int defer_make = texture_frame_budget_async_enabled() && !r->preload;
 
-	if (r->preload != 1) {
+	if (r->preload != 1 && !defer_make) {
 		if (sdl_ic_load(r->sprite, NULL) < 0) {
 			return STX_NONE;
 		}
@@ -581,7 +983,7 @@ static int tex_entry_build_sprite(int cache_index, const struct tex_request *r, 
 	uint16_t *flags_ptr = (uint16_t *)&sdlt[cache_index].flags;
 	__atomic_store_n(flags_ptr, SF_USED | SF_SPRITE, __ATOMIC_RELEASE);
 
-	if (r->preload != 1) {
+	if (r->preload != 1 && !defer_make) {
 		sdl_make(sdlt + cache_index, sdli + r->sprite, r->preload);
 	}
 
@@ -622,7 +1024,7 @@ static int texcache_acquire_slot(void)
 		int can_evict = 1;
 
 		// Check work_state under lock
-		if (sdl_multi && (flags_load(&sdlt[cache_index]) & SF_SPRITE)) {
+		if ((sdl_multi || texture_frame_budget_async_enabled()) && (flags_load(&sdlt[cache_index]) & SF_SPRITE)) {
 			SDL_LockMutex(g_tex_jobs.mutex);
 			if (sdlt[cache_index].work_state != TX_WORK_IDLE) {
 				// Slot has queued or in-progress work, cannot evict
@@ -650,9 +1052,12 @@ static int texcache_acquire_slot(void)
 			continue;
 		}
 
-		uint16_t flags = flags_load(&sdlt[cache_index]);
-		if (flags & SF_SPRITE) {
-			hash2 = (int)hashfunc(sdlt[cache_index].sprite, sdlt[cache_index].ml, sdlt[cache_index].ll,
+			uint16_t flags = flags_load(&sdlt[cache_index]);
+#ifdef SDL_TEXTURE_FRAME_BUDGET_ASYNC
+			texture_frame_budget_dispose_upload(cache_index);
+#endif
+			if (flags & SF_SPRITE) {
+				hash2 = (int)hashfunc(sdlt[cache_index].sprite, sdlt[cache_index].ml, sdlt[cache_index].ll,
 			    sdlt[cache_index].rl, sdlt[cache_index].ul, sdlt[cache_index].dl);
 		} else if (flags & SF_TEXT) {
 			hash2 = (int)hashfunc_text(
@@ -763,6 +1168,20 @@ static int tex_entry_ensure_ready(int cache_index, const struct tex_request *r)
 		return cache_index;
 	}
 
+	if (texture_frame_budget_async_enabled() && !r->preload && (flags_load(&sdlt[cache_index]) & SF_SPRITE)) {
+		uint16_t flags = flags_load(&sdlt[cache_index]);
+
+		if (!(flags & SF_DIDMAKE)) {
+			(void)sdl_texture_queue_cache_index(cache_index);
+			return STX_NONE;
+		}
+		if (!(flags & SF_DIDTEX)) {
+			return STX_NONE;
+		}
+		return cache_index;
+	}
+
+#ifndef SDL_TEXTURE_FRAME_BUDGET_ASYNC
 	/* Sprite path - wait for workers and ensure GPU texture is ready */
 	if (!r->preload && (flags_load(&sdlt[cache_index]) & SF_SPRITE)) {
 		// Wait for background workers to complete processing
@@ -827,6 +1246,7 @@ static int tex_entry_ensure_ready(int cache_index, const struct tex_request *r)
 #endif
 		}
 	}
+#endif
 
 	return cache_index;
 }
@@ -841,6 +1261,7 @@ int sdl_tx_load(uint32_t sprite, signed char sink, unsigned char freeze, unsigne
 {
 	int cache_index, panic = 0;
 	int hash;
+	int async_render_miss = 0;
 
 	// Build request struct for cleaner parameter handling
 	struct tex_request req = tex_request_from_args(sprite, sink, freeze, scale, cr, cg, cb, light, sat, c1, c2, c3,
@@ -900,6 +1321,10 @@ int sdl_tx_load(uint32_t sprite, signed char sink, unsigned char freeze, unsigne
 		cache_index = tex_entry_build_text(cache_index, &req, hash);
 	} else {
 		cache_index = tex_entry_build_sprite(cache_index, &req, hash);
+		if (cache_index != STX_NONE && texture_frame_budget_async_enabled() && !req.preload) {
+			(void)sdl_texture_queue_cache_index(cache_index);
+			async_render_miss = 1;
+		}
 	}
 
 	if (cache_index == STX_NONE) {
@@ -911,6 +1336,10 @@ int sdl_tx_load(uint32_t sprite, signed char sink, unsigned char freeze, unsigne
 		texc_pre++;
 	} else if (sprite) { // Do not count missed text sprites. Those are expected.
 		texc_miss++;
+	}
+
+	if (async_render_miss) {
+		return STX_NONE;
 	}
 
 	return cache_index;

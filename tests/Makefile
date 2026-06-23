@@ -62,11 +62,12 @@ TEST_RENDER_PRIMS = $(BIN_DIR)/test_render_primitives
 TEST_PRIMITIVE_BACKEND_ROUTE = $(BIN_DIR)/test_primitive_backend_route
 TEST_SPRITE_BACKEND_BLIT = $(BIN_DIR)/test_sprite_backend_blit
 TEST_TEXT_BACKEND_RENDER = $(BIN_DIR)/test_text_backend_render
+TEST_TEXTURE_FRAME_BUDGET = $(BIN_DIR)/test_texture_frame_budget
 TEST_SPRITE_CONFIG = $(BIN_DIR)/test_sprite_config
 TEST_RENDERER_BACKEND_CONTRACT = $(BIN_DIR)/test_renderer_backend_contract
 TEST_NATIVE_LIFECYCLE_API = $(BIN_DIR)/test_native_lifecycle_api.o
 
-all: $(TEST_RENDERER_BACKEND_CONTRACT) $(TEST_NATIVE_LIFECYCLE_API) $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_PRIMITIVE_BACKEND_ROUTE) $(TEST_SPRITE_BACKEND_BLIT) $(TEST_TEXT_BACKEND_RENDER) $(TEST_SPRITE_CONFIG)
+all: $(TEST_RENDERER_BACKEND_CONTRACT) $(TEST_NATIVE_LIFECYCLE_API) $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_PRIMITIVE_BACKEND_ROUTE) $(TEST_SPRITE_BACKEND_BLIT) $(TEST_TEXT_BACKEND_RENDER) $(TEST_TEXTURE_FRAME_BUDGET) $(TEST_SPRITE_CONFIG)
 test: run
 
 $(TEST_SERIALIZED): test_texture_cache.c $(ALL_SRCS)
@@ -96,6 +97,10 @@ $(TEST_SPRITE_BACKEND_BLIT): test_sprite_backend_blit.c $(ALL_SRCS) ../src/rende
 $(TEST_TEXT_BACKEND_RENDER): test_text_backend_render.c $(ALL_SRCS)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(CFLAGS) -DSDL_RENDER_BACKEND_TEXTURES_FOR_TEST $^ -o $@ $(LDFLAGS)
+
+$(TEST_TEXTURE_FRAME_BUDGET): test_texture_frame_budget.c $(ALL_SRCS) ../src/render_backend/render_backend.h
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(CFLAGS) -DSDL_RENDER_BACKEND_TEXTURES_FOR_TEST -DASTONIA_TEXTURE_FRAME_BUDGET_FOR_TEST $(filter %.c,$^) -o $@ $(LDFLAGS)
 
 # Sprite config test (no SDL dependencies, self-contained stubs)
 SPRITE_CONFIG_SRCS = ../src/game/sprite_config.c ../src/lib/cjson/cJSON.c
@@ -165,6 +170,13 @@ test_text_backend_render: $(TEST_TEXT_BACKEND_RENDER)
 	@echo "==============================================="
 	cd .. && ./bin/test_text_backend_render
 
+test_texture_frame_budget: $(TEST_TEXTURE_FRAME_BUDGET)
+	@echo ""
+	@echo "==============================================="
+	@echo "Running texture frame-budget tests..."
+	@echo "==============================================="
+	cd .. && ./bin/test_texture_frame_budget
+
 # Run sprite config tests
 test_sprite_config: $(TEST_SPRITE_CONFIG)
 	@echo ""
@@ -189,7 +201,7 @@ test_native_lifecycle_api: $(TEST_NATIVE_LIFECYCLE_API)
 	@echo "Native lifecycle API compile check passed"
 
 # Run all tests in sequence
-run: test_renderer_backend_contract test_native_lifecycle_api test_serialized test_concurrent test_hash_diag test_render_prims test_primitive_backend_route test_sprite_backend_blit test_text_backend_render test_sprite_config
+run: test_renderer_backend_contract test_native_lifecycle_api test_serialized test_concurrent test_hash_diag test_render_prims test_primitive_backend_route test_sprite_backend_blit test_text_backend_render test_texture_frame_budget test_sprite_config
 	@echo ""
 	@echo "==============================================="
 	@echo "All tests passed!"
@@ -197,7 +209,7 @@ run: test_renderer_backend_contract test_native_lifecycle_api test_serialized te
 
 clean:
 	rm -f $(TEST_SERIALIZED) $(TEST_CONCURRENT) $(TEST_HASH_DIAG) $(TEST_RENDER_PRIMS) $(TEST_SPRITE_CONFIG) \
-		$(TEST_PRIMITIVE_BACKEND_ROUTE) $(TEST_SPRITE_BACKEND_BLIT) $(TEST_TEXT_BACKEND_RENDER) $(TEST_RENDERER_BACKEND_CONTRACT) \
+		$(TEST_PRIMITIVE_BACKEND_ROUTE) $(TEST_SPRITE_BACKEND_BLIT) $(TEST_TEXT_BACKEND_RENDER) $(TEST_TEXTURE_FRAME_BUDGET) $(TEST_RENDERER_BACKEND_CONTRACT) \
 		$(TEST_NATIVE_LIFECYCLE_API) *.o
 
-.PHONY: all clean run test_serialized test_concurrent test_render_prims test_primitive_backend_route test_sprite_backend_blit test_text_backend_render test_sprite_config test_renderer_backend_contract test_native_lifecycle_api
+.PHONY: all clean run test_serialized test_concurrent test_render_prims test_primitive_backend_route test_sprite_backend_blit test_text_backend_render test_texture_frame_budget test_sprite_config test_renderer_backend_contract test_native_lifecycle_api

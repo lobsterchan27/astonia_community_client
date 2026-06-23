@@ -855,41 +855,7 @@ int if_single_thread_process_one_job(void)
 		return 0;
 	}
 
-	// Pop a job from the queue (non-blocking)
-	texture_job_t job;
-	if (!tex_jobs_pop(&job, 0)) {
-		return 0; // Queue empty
-	}
-
-	int cache_index = job.cache_index;
-	struct sdl_texture *tex = &sdlt[cache_index];
-
-	// Single-threaded: no races possible, generation check is sufficient
-	// If generation changed, the slot was evicted and reused - abandon this work
-	if (tex->generation != job.generation) {
-		return 0;
-	}
-
-	// Mark in-worker (no lock needed in single-threaded mode)
-	tex->work_state = TX_WORK_IN_WORKER;
-
-	// Do the actual work: load image and do stages 1+2
-	unsigned int sprite = tex->sprite;
-
-	if (sdl_ic_load(sprite, NULL) < 0) {
-		// Failed: mark idle and leave DIDMAKE unset
-		// Generation can't change under us in single-threaded mode.
-		return 0;
-	}
-
-	// Stage 1 + 2
-	sdl_make(tex, &sdli[sprite], 1);
-	sdl_make(tex, &sdli[sprite], 2);
-#ifdef __EMSCRIPTEN__
-	astonia_wasm_texture_cpu_work_count++;
-#endif
-
-	return 1;
+	return sdl_texture_process_one_queued_job();
 }
 
 void sdl_pre_add(unsigned int sprite, signed char sink, unsigned char freeze, unsigned char scale, char cr, char cg,

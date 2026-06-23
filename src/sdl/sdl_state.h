@@ -108,6 +108,13 @@ typedef struct texture_job_queue {
 	struct SDL_Condition *cond;
 } texture_job_queue_t;
 
+typedef struct sdl_texture_frame_progress {
+	int cpu_jobs;
+	int gpu_uploads;
+	int queue_depth;
+	int ready_without_texture;
+} SdlTextureFrameProgress;
+
 // Lock-free flag operation helpers.
 // These provide consistent atomic ordering across all SDL modules.
 static inline uint16_t flags_load(struct sdl_texture *st)

@@ -24,6 +24,10 @@
 #include "sdl/sdl_private.h"
 #include "sdl/sdl_state.h"
 
+#define ASTONIA_WASM_TEXTURE_CPU_JOBS_PER_FRAME 1
+#define ASTONIA_WASM_TEXTURE_GPU_UPLOADS_PER_FRAME 2
+#define ASTONIA_WASM_TEXTURE_FRAME_BUDGET_MS 4u
+
 SDL_Window *sdlwnd = NULL;
 SDL_Renderer *sdlren = NULL;
 
@@ -216,33 +220,24 @@ int sdl_check_mouse(void)
 void sdl_pre_add(unsigned int sprite, signed char sink, unsigned char freeze, unsigned char scale, char cr, char cg,
     char cb, char light, char sat, int c1, int c2, int c3, int shine, char ml, char ll, char rl, char ul, char dl)
 {
-	(void)sprite;
-	(void)sink;
-	(void)freeze;
-	(void)scale;
-	(void)cr;
-	(void)cg;
-	(void)cb;
-	(void)light;
-	(void)sat;
-	(void)c1;
-	(void)c2;
-	(void)c3;
-	(void)shine;
-	(void)ml;
-	(void)ll;
-	(void)rl;
-	(void)ul;
-	(void)dl;
+	int cache_index = sdl_tx_load(sprite, sink, freeze, scale, cr, cg, cb, light, sat, c1, c2, c3, shine, ml, ll, rl,
+	    ul, dl, NULL, 0, 0, NULL, 0, 1);
+
+	if (cache_index >= 0) {
+		(void)sdl_texture_queue_cache_index(cache_index);
+	}
 }
 
 int if_single_thread_process_one_job(void)
 {
-	return 0;
+	return sdl_texture_process_one_queued_job();
 }
 
 int sdl_pre_do(void)
 {
+	(void)sdl_texture_advance_frame_budget(
+	    ASTONIA_WASM_TEXTURE_CPU_JOBS_PER_FRAME, ASTONIA_WASM_TEXTURE_GPU_UPLOADS_PER_FRAME,
+	    ASTONIA_WASM_TEXTURE_FRAME_BUDGET_MS);
 	return 1;
 }
 

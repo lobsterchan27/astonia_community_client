@@ -1,14 +1,17 @@
 import { expect, test } from '@playwright/test';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 
 const browserRoot = fileURLToPath(new URL('..', import.meta.url));
+const repoRoot = resolve(browserRoot, '..');
 const distModulePath = resolve(browserRoot, 'dist/astonia-client.js');
 const distDataPath = resolve(browserRoot, 'dist/astonia-client.data');
+const smokeArtifactDir = resolve(repoRoot, '.worktree/smoke');
 const artifactPattern = /\/dist\/astonia-client\.(js|wasm|data)(?:\?.*)?$/;
 const ASTONIA_NATIVE_CLIENT_SHOW_USAGE = 1;
 const ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED = -5;
+const STX_NONE = -1;
 
 const launchCaptureModuleSource = `
 window.nativeLaunchCalls = window.nativeLaunchCalls || [];
@@ -731,6 +734,123 @@ test('generated native module exposes smoke observability getters', async ({ pag
 		textureCpuWorkCount: 0
 	});
 	expect(failures).toEqual([]);
+});
+
+test('generated native texture pipeline progresses over browser frames', async ({ page }, testInfo) => {
+	if (!existsSync(distModulePath)) {
+		test.skip(true, 'native WASM module has not been built');
+	}
+
+	const failures = collectBrowserFailures(page);
+	await installMockWebGpu(page);
+	await page.goto('/?astonia_probe=1');
+	await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'ready');
+	await page.getByRole('button', { name: 'Launch' }).click();
+
+	let result;
+	try {
+		await page.waitForFunction(
+			() => {
+				const module = window.astoniaNativeModule;
+				return (
+					typeof module?._astonia_native_startup_adapter_status === 'function' &&
+					module._astonia_native_startup_adapter_status() === 2 &&
+					module._astonia_native_startup_adapter_startup_result() === 0 &&
+					module._astonia_native_startup_adapter_loop_init_result() === 0
+				);
+			},
+			null,
+			{ timeout: 10_000 }
+		);
+
+		result = await page.evaluate(async () => {
+			const module = window.astoniaNativeModule;
+
+			const exports = [
+				'_astonia_wasm_texture_request_sprite',
+				'_astonia_wasm_texture_pump_frame',
+				'_astonia_wasm_texture_queue_depth',
+				'_astonia_wasm_texture_made_count',
+				'_astonia_wasm_texture_uploaded_count'
+			];
+			const missing = exports.filter((name) => typeof module[name] !== 'function');
+			if (missing.length) {
+				return { missing, running: 0, samples: [], responsivenessTicks: 0 };
+			}
+
+			let responsivenessTicks = 0;
+			const interval = window.setInterval(() => {
+				responsivenessTicks += 1;
+			}, 0);
+			const samples = [];
+			let requestResult = null;
+
+			try {
+				requestResult = module._astonia_wasm_texture_request_sprite(2);
+				for (let frame = 0; frame < 180; frame += 1) {
+					await new Promise((resolve) => requestAnimationFrame(resolve));
+					const before = performance.now();
+					const pumpResult = module._astonia_wasm_texture_pump_frame();
+					const after = performance.now();
+					samples.push({
+						frame,
+						pumpResult,
+						pumpMs: Number((after - before).toFixed(3)),
+						queueDepth: module._astonia_wasm_texture_queue_depth(),
+						madeCount: module._astonia_wasm_texture_made_count(),
+						uploadedCount: module._astonia_wasm_texture_uploaded_count(),
+						responsivenessTicks
+					});
+					if (samples.at(-1).uploadedCount > 0 && responsivenessTicks > 0) {
+						break;
+					}
+				}
+				return {
+					missing,
+					running: module._astonia_native_startup_adapter_status(),
+					startupResult: module._astonia_native_startup_adapter_startup_result(),
+					loopInitResult: module._astonia_native_startup_adapter_loop_init_result(),
+					frameCount: module._astonia_native_startup_adapter_frame_count(),
+					stepCount: module._astonia_native_startup_adapter_step_count(),
+					requestResult,
+					samples,
+					responsivenessTicks
+				};
+			} finally {
+				window.clearInterval(interval);
+			}
+		});
+	} catch (error) {
+		result = {
+			missing: [],
+			running: 0,
+			requestResult: null,
+			samples: [],
+			responsivenessTicks: 0,
+			blockedBy: 'host-launched generated native module did not reach #43 texture progress observation',
+			error: String(error?.stack || error?.message || error)
+		};
+	}
+
+	mkdirSync(smokeArtifactDir, { recursive: true });
+	const artifactPath = resolve(smokeArtifactDir, `texture-progress-${Date.now()}.json`);
+	writeFileSync(artifactPath, JSON.stringify({ result, failures }, null, 2));
+	await testInfo.attach('texture-progress-summary', { path: artifactPath, contentType: 'application/json' });
+
+	expect(result.missing).toEqual([]);
+	expect(result.error, `texture progress artifact: ${artifactPath}`).toBeUndefined();
+	expect(result.running, `texture progress artifact: ${artifactPath}`).toBe(2);
+	expect(result.startupResult, `texture progress artifact: ${artifactPath}`).toBe(0);
+	expect(result.loopInitResult, `texture progress artifact: ${artifactPath}`).toBe(0);
+	expect(result.requestResult).toBe(STX_NONE);
+	expect(result.samples.length).toBeGreaterThan(1);
+	expect(result.samples.some((sample) => sample.queueDepth > 0 || sample.madeCount > 0 || sample.uploadedCount > 0)).toBe(
+		true
+	);
+	expect(result.samples.at(-1).madeCount).toBeGreaterThanOrEqual(1);
+	expect(result.samples.at(-1).uploadedCount).toBeGreaterThanOrEqual(1);
+	expect(result.responsivenessTicks).toBeGreaterThan(0);
+	expect(failures.filter((failure) => failure.startsWith('pageerror:'))).toEqual([]);
 });
 
 test('generated native module exports native lifecycle entry points', async ({ page }) => {

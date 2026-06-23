@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "astonia.h"
 #include "dll.h"
 #include "render_backend/render_backend.h"
 #include "render_backend/sokol_webgpu_backend.h"
@@ -20,6 +21,7 @@
 
 static const AstoniaRendererBackend *g_renderer;
 static bool g_frame_open;
+static bool g_texture_contract_initialized;
 
 extern int astonia_wasm_render_begin_count;
 extern int astonia_wasm_render_present_count;
@@ -53,6 +55,14 @@ static void reset_smoke_progress_counters(void)
 	astonia_wasm_texture_job_enqueue_count = 0;
 	astonia_wasm_texture_job_drop_count = 0;
 	astonia_wasm_texture_cpu_work_count = 0;
+}
+
+static int sdl_backend_budget_allows_more(uint64_t deadline_ticks, int did_work)
+{
+	if (deadline_ticks == 0 || !did_work) {
+		return 1;
+	}
+	return SDL_GetTicks() < deadline_ticks;
 }
 
 int sdl_init(int width, int height, char *title, int monitor)
@@ -151,6 +161,93 @@ DLL_EXPORT int astonia_wasm_native_state_probe_sprite(int sprite)
 	return sdl_native_resource_probe_sprite((unsigned int)sprite);
 }
 
+DLL_EXPORT int astonia_wasm_texture_request_sprite(int sprite)
+{
+	if (sprite < 0 || sprite >= MAXSPRITE) {
+		return STX_NONE;
+	}
+	if (!g_renderer) {
+		return STX_NONE;
+	}
+
+	return sdl_tx_load((unsigned int)sprite, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, 0, 0,
+	    NULL, 0, 0);
+}
+
+DLL_EXPORT int astonia_wasm_texture_contract_init(int width, int height)
+{
+	if (g_renderer) {
+		return 1;
+	}
+
+	if (width <= 0) {
+		width = 1280;
+	}
+	if (height <= 0) {
+		height = 720;
+	}
+
+	g_texture_contract_initialized = sdl_init(width, height, "Astonia texture contract", 0) != 0;
+	return g_texture_contract_initialized ? 1 : 0;
+}
+
+DLL_EXPORT void astonia_wasm_texture_contract_shutdown(void)
+{
+	if (!g_texture_contract_initialized) {
+		return;
+	}
+
+	sdl_exit();
+	g_texture_contract_initialized = false;
+}
+
+DLL_EXPORT int astonia_wasm_texture_pump_frame(void)
+{
+	SdlTextureFrameProgress progress = sdl_texture_advance_frame_budget(1, 2, 4u);
+
+	return progress.cpu_jobs + progress.gpu_uploads;
+}
+
+DLL_EXPORT int astonia_wasm_texture_queue_depth(void)
+{
+	if (!g_tex_jobs.mutex) {
+		return 0;
+	}
+
+	SDL_LockMutex(g_tex_jobs.mutex);
+	int depth = g_tex_jobs.count;
+	SDL_UnlockMutex(g_tex_jobs.mutex);
+	return depth;
+}
+
+DLL_EXPORT int astonia_wasm_texture_made_count(void)
+{
+	int count = 0;
+
+	for (int i = 0; i < MAX_TEXCACHE; i++) {
+		uint16_t flags = flags_load(&sdlt[i]);
+		if ((flags & SF_SPRITE) && (flags & SF_DIDMAKE)) {
+			count++;
+		}
+	}
+
+	return count;
+}
+
+DLL_EXPORT int astonia_wasm_texture_uploaded_count(void)
+{
+	int count = 0;
+
+	for (int i = 0; i < MAX_TEXCACHE; i++) {
+		uint16_t flags = flags_load(&sdlt[i]);
+		if ((flags & SF_SPRITE) && (flags & SF_DIDTEX)) {
+			count++;
+		}
+	}
+
+	return count;
+}
+
 SDL_Texture *sdl_backend_create_texture_from_argb8888(
     int width, int height, const uint32_t *pixels, size_t pitch_bytes)
 {
@@ -198,6 +295,115 @@ SDL_Texture *sdl_backend_create_texture_from_argb8888(
 	astonia_wasm_texture_create_count++;
 	astonia_wasm_texture_upload_count++;
 	return (SDL_Texture *)texture;
+}
+
+static SdlBackendTexture *sdl_backend_create_empty_rgba_texture(int width, int height)
+{
+	SdlBackendTexture *texture;
+	AstoniaRendererTextureDesc desc;
+	AstoniaRendererTexture renderer_texture;
+
+	if (!g_renderer || !g_renderer->create_texture || width <= 0 || height <= 0) {
+		return NULL;
+	}
+
+	desc.width = width;
+	desc.height = height;
+	desc.format = ASTONIA_RENDERER_TEXTURE_FORMAT_RGBA8888;
+	renderer_texture = g_renderer->create_texture(&desc, NULL, 0u);
+	if (renderer_texture.id == ASTONIA_RENDERER_TEXTURE_INVALID.id) {
+		return NULL;
+	}
+
+	texture = malloc(sizeof(*texture));
+	if (!texture) {
+		g_renderer->destroy_texture(renderer_texture);
+		return NULL;
+	}
+	texture->texture = renderer_texture;
+	texture->width = width;
+	texture->height = height;
+	texture->alpha = 255u;
+	astonia_wasm_texture_create_count++;
+	return texture;
+}
+
+int sdl_backend_upload_texture_argb8888_frame_budget_step(SdlBackendTextureUploadState *state, int width, int height,
+    const uint32_t *pixels, size_t pitch_bytes, uint64_t deadline_ticks, SDL_Texture **out_texture)
+{
+	size_t row_bytes;
+	int did_work = 0;
+
+	if (out_texture) {
+		*out_texture = NULL;
+	}
+	if (!state || !out_texture || !pixels || width <= 0 || height <= 0 ||
+	    !sdl_backend_argb8888_pitch_is_valid(width, pitch_bytes) || !g_renderer || !g_renderer->update_texture) {
+		return -1;
+	}
+
+	if (state->width != 0 && (state->width != width || state->height != height)) {
+		sdl_backend_upload_texture_argb8888_dispose(state);
+	}
+	state->width = width;
+	state->height = height;
+
+	row_bytes = (size_t)width * 4u;
+	if (!state->texture) {
+		state->texture = sdl_backend_create_empty_rgba_texture(width, height);
+		if (!state->texture) {
+			return -1;
+		}
+	}
+	if (!state->row_rgba) {
+		state->row_rgba = malloc(row_bytes);
+		if (!state->row_rgba) {
+			sdl_backend_upload_texture_argb8888_dispose(state);
+			return -1;
+		}
+	}
+
+	while (state->next_y < height && sdl_backend_budget_allows_more(deadline_ticks, did_work)) {
+		SdlBackendTexture *texture = (SdlBackendTexture *)state->texture;
+		const uint8_t *row = (const uint8_t *)pixels + (size_t)state->next_y * pitch_bytes;
+		AstoniaRendererRect rect = {
+			.x = 0.0f,
+			.y = (float)state->next_y,
+			.w = (float)width,
+			.h = 1.0f,
+		};
+
+		astonia_renderer_argb8888_to_rgba8888(state->row_rgba, (const uint32_t *)row, (size_t)width);
+		if (!g_renderer->update_texture(texture->texture, &rect, state->row_rgba, row_bytes)) {
+			sdl_backend_upload_texture_argb8888_dispose(state);
+			return -1;
+		}
+		state->next_y++;
+		did_work = 1;
+	}
+
+	if (state->next_y >= height) {
+		*out_texture = (SDL_Texture *)state->texture;
+		state->texture = NULL;
+		free(state->row_rgba);
+		memset(state, 0, sizeof(*state));
+		astonia_wasm_texture_upload_count++;
+		return 1;
+	}
+
+	return 0;
+}
+
+void sdl_backend_upload_texture_argb8888_dispose(SdlBackendTextureUploadState *state)
+{
+	if (!state) {
+		return;
+	}
+	if (state->texture) {
+		sdl_backend_destroy_texture((SDL_Texture *)state->texture);
+	}
+	free(state->row_rgba);
+	memset(state, 0, sizeof(*state));
 }
 
 void sdl_backend_destroy_texture(SDL_Texture *raw_texture)

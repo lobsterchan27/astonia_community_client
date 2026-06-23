@@ -19,6 +19,9 @@
 #include "sokol_glue.h"
 #include "sokol_log.h"
 
+int astonia_sokol_webgpu_update_image_region(
+    sg_image image, int x, int y, int width, int height, const void *pixels, size_t pitch_bytes);
+
 typedef struct sokol_webgpu_state {
 	bool initialized;
 	int frames;
@@ -556,8 +559,8 @@ static AstoniaRendererTexture sokol_webgpu_create_texture(
 	sg_image_desc image_desc = {0};
 	sg_view_desc view_desc = {0};
 
-	if (!g_sokol_webgpu.initialized || !desc || desc->width <= 0 || desc->height <= 0 || !pixels ||
-	    pitch_bytes == 0u ||
+	if (!g_sokol_webgpu.initialized || !desc || desc->width <= 0 || desc->height <= 0 ||
+	    (pixels && pitch_bytes == 0u) || (!pixels && pitch_bytes != 0u) ||
 	    (desc->format != ASTONIA_RENDERER_TEXTURE_FORMAT_ARGB8888 &&
 	        desc->format != ASTONIA_RENDERER_TEXTURE_FORMAT_RGBA8888)) {
 		return texture;
@@ -594,7 +597,7 @@ static AstoniaRendererTexture sokol_webgpu_create_texture(
 	slot->source_format = desc->format;
 	texture.id = slot->id;
 
-	if (!update_texture_full(slot, desc, pixels, pitch_bytes)) {
+	if (pixels && !update_texture_full(slot, desc, pixels, pitch_bytes)) {
 		sokol_webgpu_destroy_texture(texture);
 		return ASTONIA_RENDERER_TEXTURE_INVALID;
 	}
@@ -607,6 +610,10 @@ static int sokol_webgpu_update_texture(
 {
 	SokolTextureSlot *slot;
 	AstoniaRendererTextureDesc desc;
+	uint8_t *allocated = NULL;
+	const void *upload_pixels = NULL;
+	size_t upload_pitch = 0u;
+	int x, y, width, height;
 
 	if (!g_sokol_webgpu.initialized || !rect || !pixels || pitch_bytes == 0u) {
 		return 0;
@@ -617,14 +624,25 @@ static int sokol_webgpu_update_texture(
 		return 0;
 	}
 
-	if (rect->x != 0.0f || rect->y != 0.0f || rect->w != (float)slot->width || rect->h != (float)slot->height) {
+	x = (int)rect->x;
+	y = (int)rect->y;
+	width = (int)rect->w;
+	height = (int)rect->h;
+	if (rect->x != (float)x || rect->y != (float)y || rect->w != (float)width || rect->h != (float)height || x < 0 ||
+	    y < 0 || width <= 0 || height <= 0 || x + width > slot->width || y + height > slot->height) {
 		return 0;
 	}
 
-	desc.width = slot->width;
-	desc.height = slot->height;
+	desc.width = width;
+	desc.height = height;
 	desc.format = slot->source_format;
-	return update_texture_full(slot, &desc, pixels, pitch_bytes);
+	if (!prepare_rgba_pixels(&desc, pixels, pitch_bytes, &allocated, &upload_pixels, &upload_pitch)) {
+		return 0;
+	}
+
+	int ok = astonia_sokol_webgpu_update_image_region(slot->image, x, y, width, height, upload_pixels, upload_pitch);
+	free(allocated);
+	return ok;
 }
 
 static void sokol_webgpu_destroy_texture(AstoniaRendererTexture texture)
