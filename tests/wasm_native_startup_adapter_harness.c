@@ -37,6 +37,7 @@ extern int want_width;
 extern int want_height;
 
 static int g_sdl_init_count;
+static int g_sdl_init_result = 1;
 static int g_sdl_init_width;
 static int g_sdl_init_height;
 static int g_render_init_count;
@@ -45,6 +46,7 @@ static int g_help_init_count;
 static int g_update_user_keys_count;
 static int g_loop_init_count;
 static int g_loop_step_count;
+static int g_loop_step_result = 1;
 static int g_loop_shutdown_count;
 static int g_native_shutdown_count;
 static int g_sapp_request_quit_count;
@@ -154,7 +156,7 @@ int sdl_init(int width, int height, char *title, int monitor)
 	g_sdl_init_count++;
 	g_sdl_init_width = width;
 	g_sdl_init_height = height;
-	return 1;
+	return g_sdl_init_result;
 }
 
 void sdl_exit(void)
@@ -220,7 +222,7 @@ int main_loop_init(void)
 int main_loop_step(void)
 {
 	g_loop_step_count++;
-	return 1;
+	return g_loop_step_result;
 }
 
 void main_loop_shutdown(void)
@@ -261,6 +263,7 @@ EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_run(void)
 	sdl_multi = 4;
 
 	g_sdl_init_count = 0;
+	g_sdl_init_result = 1;
 	g_sdl_init_width = 0;
 	g_sdl_init_height = 0;
 	g_render_init_count = 0;
@@ -269,6 +272,7 @@ EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_run(void)
 	g_update_user_keys_count = 0;
 	g_loop_init_count = 0;
 	g_loop_step_count = 0;
+	g_loop_step_result = 1;
 	g_loop_shutdown_count = 0;
 	g_native_shutdown_count = 0;
 	g_sapp_request_quit_count = 0;
@@ -282,12 +286,38 @@ EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_run(void)
 
 	desc.init_cb();
 	g_harness_phase = 3;
+	if (astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_STARTING ||
+	    astonia_native_startup_adapter_startup_result() != ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED ||
+	    astonia_native_startup_adapter_loop_init_result() != ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED ||
+	    g_sdl_init_count != 0 || g_render_init_count != 0 || g_loop_init_count != 0) {
+		return 13;
+	}
+
 	desc.frame_cb();
 	g_harness_phase = 4;
+	if (astonia_native_startup_adapter_startup_result() != ASTONIA_NATIVE_CLIENT_OK ||
+	    astonia_native_startup_adapter_loop_init_result() != ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED ||
+	    astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_STARTING ||
+	    g_sdl_init_count != 1 || g_render_init_count != 1 || g_loop_init_count != 0 ||
+	    astonia_native_startup_adapter_frame_count() != 0 || astonia_native_startup_adapter_step_count() != 0) {
+		return 14;
+	}
+
 	desc.frame_cb();
 	g_harness_phase = 5;
-	desc.cleanup_cb();
+	if (astonia_native_startup_adapter_loop_init_result() != 0 ||
+	    astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_RUNNING ||
+	    g_loop_init_count != 1 || astonia_native_startup_adapter_frame_count() != 0 ||
+	    astonia_native_startup_adapter_step_count() != 0) {
+		return 15;
+	}
+
+	desc.frame_cb();
 	g_harness_phase = 6;
+	desc.frame_cb();
+	g_harness_phase = 7;
+	desc.cleanup_cb();
+	g_harness_phase = 8;
 
 	if (astonia_native_startup_adapter_startup_result() != ASTONIA_NATIVE_CLIENT_OK) {
 		return 2;
@@ -355,8 +385,11 @@ EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_network_pacing(void
 	want_height = 0;
 	sdl_multi = 4;
 
+	g_sdl_init_count = 0;
+	g_sdl_init_result = 1;
 	g_loop_init_count = 0;
 	g_loop_step_count = 0;
+	g_loop_step_result = 1;
 	g_loop_shutdown_count = 0;
 	g_native_shutdown_count = 0;
 	g_sapp_request_quit_count = 0;
@@ -368,8 +401,20 @@ EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_network_pacing(void
 	}
 
 	desc.init_cb();
-	if (astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_RUNNING) {
+	if (astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_STARTING ||
+	    astonia_native_startup_adapter_startup_result() != ASTONIA_NATIVE_CLIENT_RUN_NOT_STARTED) {
 		return 2;
+	}
+
+	desc.frame_cb();
+	if (astonia_native_startup_adapter_startup_result() != ASTONIA_NATIVE_CLIENT_OK ||
+	    astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_STARTING) {
+		return 7;
+	}
+	desc.frame_cb();
+	if (astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_RUNNING ||
+	    astonia_native_startup_adapter_frame_count() != 0 || astonia_native_startup_adapter_step_count() != 0) {
+		return 8;
 	}
 
 	sockstate = 1;
@@ -401,6 +446,121 @@ EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_network_pacing(void
 	}
 
 	g_harness_phase = 41;
+	return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_startup_failure_requests_quit(void)
+{
+	char *argv[] = {
+		"moac",
+		"-u",
+		"BrowserUser",
+		"-p",
+		"BrowserPass",
+		"-d",
+		"ws://127.0.0.1:8787/gateway",
+	};
+	sapp_desc desc;
+
+	memset(username, 0, sizeof(username));
+	memset(password, 0, sizeof(password));
+	server_url[0] = '\0';
+	sockstate = 0;
+	g_sdl_init_count = 0;
+	g_loop_init_count = 0;
+	g_sdl_init_result = 0;
+	g_loop_step_count = 0;
+	g_loop_step_result = 1;
+	g_loop_shutdown_count = 0;
+	g_native_shutdown_count = 0;
+	g_sapp_request_quit_count = 0;
+	g_harness_phase = 50;
+
+	desc = astonia_native_startup_adapter_sokol_main((int)(sizeof(argv) / sizeof(argv[0])), argv);
+	if (!desc.init_cb || !desc.frame_cb || !desc.cleanup_cb) {
+		return 1;
+	}
+
+	desc.init_cb();
+	if (g_sapp_request_quit_count != 0 || astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_STARTING) {
+		return 2;
+	}
+
+	desc.frame_cb();
+	if (astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_STARTUP_FAILED ||
+	    astonia_native_startup_adapter_shutdown_count() != 1 || g_native_shutdown_count != 0 ||
+	    g_sapp_request_quit_count != 1 || g_loop_init_count != 0 || g_loop_step_count != 0 ||
+	    g_sdl_init_count != 1) {
+		return 3;
+	}
+
+	desc.frame_cb();
+	desc.cleanup_cb();
+	if (astonia_native_startup_adapter_shutdown_count() != 1 || g_native_shutdown_count != 0 ||
+	    g_sapp_request_quit_count != 1) {
+		return 4;
+	}
+
+	g_harness_phase = 51;
+	return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int wasm_native_startup_adapter_harness_terminal_stop_requests_quit_once(void)
+{
+	char *argv[] = {
+		"moac",
+		"-u",
+		"BrowserUser",
+		"-p",
+		"BrowserPass",
+		"-d",
+		"ws://127.0.0.1:8787/gateway",
+	};
+	sapp_desc desc;
+
+	memset(username, 0, sizeof(username));
+	memset(password, 0, sizeof(password));
+	server_url[0] = '\0';
+	sockstate = 3;
+	g_sdl_init_count = 0;
+	g_loop_init_count = 0;
+	g_sdl_init_result = 1;
+	g_loop_step_count = 0;
+	g_loop_step_result = 1;
+	g_loop_shutdown_count = 0;
+	g_native_shutdown_count = 0;
+	g_sapp_request_quit_count = 0;
+	g_harness_phase = 60;
+
+	desc = astonia_native_startup_adapter_sokol_main((int)(sizeof(argv) / sizeof(argv[0])), argv);
+	if (!desc.init_cb || !desc.frame_cb || !desc.cleanup_cb) {
+		return 1;
+	}
+
+	desc.init_cb();
+	desc.frame_cb();
+	desc.frame_cb();
+	if (astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_RUNNING ||
+	    g_sapp_request_quit_count != 0) {
+		return 2;
+	}
+
+	g_loop_step_result = 0;
+	desc.frame_cb();
+	if (astonia_native_startup_adapter_status() != ASTONIA_NATIVE_STARTUP_ADAPTER_STOPPED ||
+	    astonia_native_startup_adapter_shutdown_count() != 1 || g_native_shutdown_count != 1 ||
+	    g_sapp_request_quit_count != 1 || g_loop_step_count != 1) {
+		return 3;
+	}
+
+	desc.frame_cb();
+	desc.cleanup_cb();
+	if (astonia_native_startup_adapter_shutdown_count() != 1 || g_native_shutdown_count != 1 ||
+	    g_sapp_request_quit_count != 1) {
+		return 4;
+	}
+
+	g_harness_phase = 61;
 	return 0;
 }
 

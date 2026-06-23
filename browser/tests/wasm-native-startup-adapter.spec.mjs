@@ -61,7 +61,7 @@ function buildHarness(emcc) {
     '-sALLOW_MEMORY_GROWTH=1',
     '-sASSERTIONS=1',
     '-sNO_EXIT_RUNTIME=1',
-    "-sEXPORTED_FUNCTIONS=['_wasm_native_startup_adapter_harness_run','_wasm_native_startup_adapter_harness_network_pacing','_wasm_native_startup_adapter_harness_phase']",
+    "-sEXPORTED_FUNCTIONS=['_wasm_native_startup_adapter_harness_run','_wasm_native_startup_adapter_harness_network_pacing','_wasm_native_startup_adapter_harness_startup_failure_requests_quit','_wasm_native_startup_adapter_harness_terminal_stop_requests_quit_once','_wasm_native_startup_adapter_harness_phase']",
     '-o',
     harnessOutput
   ];
@@ -88,7 +88,7 @@ test.describe('WASM native startup adapter harness', () => {
     buildHarness(emcc);
   });
 
-  test('passes browser argv into native startup and drives the frame loop', async ({ page }) => {
+  test('defers native startup from Sokol init into frame-driven progress', async ({ page }) => {
     await page.goto('/');
     const result = await page.evaluate(async () => {
       const imported = await import(`/dist/wasm-native-startup-adapter-harness.mjs?t=${Date.now()}`);
@@ -106,7 +106,7 @@ test.describe('WASM native startup adapter harness', () => {
       }
     });
 
-    expect(result).toEqual({ result: 0, phase: 6 });
+    expect(result).toEqual({ result: 0, phase: 8 });
   });
 
   test('paces pre-login WebSocket states without stopping native frames', async ({ page }) => {
@@ -131,5 +131,32 @@ test.describe('WASM native startup adapter harness', () => {
     });
 
     expect(result).toEqual({ result: 0, phase: 41 });
+  });
+
+  test('requests Sokol quit once for startup failure and terminal native stop', async ({ page }) => {
+    await page.goto('/');
+    const result = await page.evaluate(async () => {
+      const imported = await import(`/dist/wasm-native-startup-adapter-harness.mjs?t=${Date.now()}`);
+      const createModule = imported.default ?? imported.createWasmNativeStartupAdapterHarness;
+      const module = await createModule({
+        locateFile(path) {
+          return `/dist/${path}`;
+        }
+      });
+
+      return {
+        startupFailure: module._wasm_native_startup_adapter_harness_startup_failure_requests_quit(),
+        startupFailurePhase: module._wasm_native_startup_adapter_harness_phase(),
+        terminalStop: module._wasm_native_startup_adapter_harness_terminal_stop_requests_quit_once(),
+        terminalStopPhase: module._wasm_native_startup_adapter_harness_phase()
+      };
+    });
+
+    expect(result).toEqual({
+      startupFailure: 0,
+      startupFailurePhase: 51,
+      terminalStop: 0,
+      terminalStopPhase: 61
+    });
   });
 });

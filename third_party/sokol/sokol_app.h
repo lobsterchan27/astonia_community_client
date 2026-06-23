@@ -2716,6 +2716,19 @@ _SOKOL_PRIVATE double _sapp_timing_get(_sapp_timing_t* t) {
 //
 // >> structs
 #if defined(SOKOL_WGPU)
+#if defined(_SAPP_EMSCRIPTEN)
+typedef enum {
+    _SAPP_WGPU_EMSC_INIT_INITIAL,
+    _SAPP_WGPU_EMSC_INIT_REQUEST_ADAPTER,
+    _SAPP_WGPU_EMSC_INIT_WAIT_ADAPTER,
+    _SAPP_WGPU_EMSC_INIT_REQUEST_DEVICE,
+    _SAPP_WGPU_EMSC_INIT_WAIT_DEVICE,
+    _SAPP_WGPU_EMSC_INIT_CREATE_SURFACE,
+    _SAPP_WGPU_EMSC_INIT_DONE,
+    _SAPP_WGPU_EMSC_INIT_FAILED
+} _sapp_wgpu_emsc_init_state_t;
+#endif
+
 typedef struct {
     WGPUInstance instance;
     WGPUAdapter adapter;
@@ -2728,6 +2741,19 @@ typedef struct {
     WGPUTextureView depth_stencil_view;
     WGPUTextureView swapchain_view;
     bool init_done;
+    #if defined(_SAPP_EMSCRIPTEN)
+    _sapp_wgpu_emsc_init_state_t init_state;
+    bool adapter_cb_fired;
+    bool device_cb_fired;
+    bool teardown;
+    WGPURequestAdapterStatus adapter_status;
+    WGPURequestDeviceStatus device_status;
+    WGPUAdapter pending_adapter;
+    WGPUDevice pending_device;
+    int request_adapter_count;
+    int request_device_count;
+    int surface_create_count;
+    #endif
 } _sapp_wgpu_t;
 #endif
 
@@ -3909,6 +3935,9 @@ _SOKOL_PRIVATE void _sapp_wgpu_create_swapchain(bool called_from_resize) {
         if (0 == _sapp.wgpu.surface) {
             _SAPP_PANIC(WGPU_SWAPCHAIN_CREATE_SURFACE_FAILED);
         }
+        #if defined(_SAPP_EMSCRIPTEN)
+        _sapp.wgpu.surface_create_count++;
+        #endif
         _SAPP_STRUCT(WGPUSurfaceCapabilities, surf_caps);
         WGPUStatus caps_status = wgpuSurfaceGetCapabilities(_sapp.wgpu.surface, _sapp.wgpu.adapter, &surf_caps);
         if (caps_status != WGPUStatus_Success) {
@@ -4034,10 +4063,14 @@ _SOKOL_PRIVATE void _sapp_wgpu_swapchain_size_changed(void) {
 }
 
 _SOKOL_PRIVATE void _sapp_wgpu_device_lost_cb(const WGPUDevice* dev, WGPUDeviceLostReason reason, WGPUStringView msg, void* ud1, void* ud2) {
-    _SOKOL_UNUSED(dev); _SOKOL_UNUSED(reason); _SOKOL_UNUSED(ud1); _SOKOL_UNUSED(ud2);
+    _SOKOL_UNUSED(dev); _SOKOL_UNUSED(ud1); _SOKOL_UNUSED(ud2);
+    bool destroyed_by_emscripten_teardown = false;
+    #if defined(_SAPP_EMSCRIPTEN)
+    destroyed_by_emscripten_teardown = _sapp.wgpu.teardown && (reason == WGPUDeviceLostReason_Destroyed);
+    #endif
     // NOTE: on wgpuInstanceRelease(), the device lost callback is always called with
-    // WGPUDeviceLostReason_CallbackCancelled (even though no device should exist at that point)
-    if (reason != WGPUDeviceLostReason_CallbackCancelled) {
+    // WGPUDeviceLostReason_CallbackCancelled (even though no device should exist at that point).
+    if ((reason != WGPUDeviceLostReason_CallbackCancelled) && !destroyed_by_emscripten_teardown) {
         SOKOL_ASSERT(msg.data && (msg.length > 0));
         char buf[1024];
         _sapp_strcpy_range(msg.data, msg.length, buf, sizeof(buf));
@@ -4081,6 +4114,12 @@ _SOKOL_PRIVATE void _sapp_wgpu_request_device_cb(WGPURequestDeviceStatus status,
     _SOKOL_UNUSED(userdata1);
     _SOKOL_UNUSED(userdata2);
     SOKOL_ASSERT(!_sapp.wgpu.init_done);
+    #if defined(_SAPP_EMSCRIPTEN)
+        _sapp.wgpu.device_status = status;
+        _sapp.wgpu.pending_device = device;
+        _sapp.wgpu.device_cb_fired = true;
+        return;
+    #endif
     if (status != WGPURequestDeviceStatus_Success) {
         if (status == WGPURequestDeviceStatus_Error) {
             _SAPP_PANIC(WGPU_REQUEST_DEVICE_STATUS_ERROR);
@@ -4101,6 +4140,9 @@ _SOKOL_PRIVATE void _sapp_wgpu_request_device_cb(WGPURequestDeviceStatus status,
 
 _SOKOL_PRIVATE void _sapp_wgpu_create_device_and_swapchain(void) {
     SOKOL_ASSERT(_sapp.wgpu.adapter);
+    #if defined(_SAPP_EMSCRIPTEN)
+        _sapp.wgpu.request_device_count++;
+    #endif
     size_t cur_feature_index = 1;
     #define _SAPP_WGPU_MAX_REQUESTED_FEATURES (16)
     WGPUFeatureName requiredFeatures[_SAPP_WGPU_MAX_REQUESTED_FEATURES] = {
@@ -4173,6 +4215,12 @@ _SOKOL_PRIVATE void _sapp_wgpu_request_adapter_cb(WGPURequestAdapterStatus statu
     _SOKOL_UNUSED(msg);
     _SOKOL_UNUSED(userdata1);
     _SOKOL_UNUSED(userdata2);
+    #if defined(_SAPP_EMSCRIPTEN)
+        _sapp.wgpu.adapter_status = status;
+        _sapp.wgpu.pending_adapter = adapter;
+        _sapp.wgpu.adapter_cb_fired = true;
+        return;
+    #endif
     if (status != WGPURequestAdapterStatus_Success) {
         switch (status) {
             case WGPURequestAdapterStatus_Unavailable: _SAPP_PANIC(WGPU_REQUEST_ADAPTER_STATUS_UNAVAILABLE); break;
@@ -4190,6 +4238,9 @@ _SOKOL_PRIVATE void _sapp_wgpu_request_adapter_cb(WGPURequestAdapterStatus statu
 
 _SOKOL_PRIVATE void _sapp_wgpu_create_adapter(void) {
     SOKOL_ASSERT(_sapp.wgpu.instance);
+    #if defined(_SAPP_EMSCRIPTEN)
+        _sapp.wgpu.request_adapter_count++;
+    #endif
     // FIXME: power preference?
     _SAPP_STRUCT(WGPURequestAdapterCallbackInfo, cb_info);
     cb_info.mode = _sapp_wgpu_callbackmode();
@@ -4201,6 +4252,87 @@ _SOKOL_PRIVATE void _sapp_wgpu_create_adapter(void) {
         _SOKOL_UNUSED(future);
     #endif
 }
+
+#if defined(_SAPP_EMSCRIPTEN)
+_SOKOL_PRIVATE void _sapp_wgpu_emsc_fail_adapter(WGPURequestAdapterStatus status) {
+    _sapp.wgpu.init_state = _SAPP_WGPU_EMSC_INIT_FAILED;
+    switch (status) {
+        case WGPURequestAdapterStatus_Unavailable: _SAPP_PANIC(WGPU_REQUEST_ADAPTER_STATUS_UNAVAILABLE); break;
+        case WGPURequestAdapterStatus_Error: _SAPP_PANIC(WGPU_REQUEST_ADAPTER_STATUS_ERROR); break;
+        default: _SAPP_PANIC(WGPU_REQUEST_ADAPTER_STATUS_UNKNOWN); break;
+    }
+}
+
+_SOKOL_PRIVATE void _sapp_wgpu_emsc_fail_device(WGPURequestDeviceStatus status) {
+    _sapp.wgpu.init_state = _SAPP_WGPU_EMSC_INIT_FAILED;
+    if (status == WGPURequestDeviceStatus_Error) {
+        _SAPP_PANIC(WGPU_REQUEST_DEVICE_STATUS_ERROR);
+    } else {
+        _SAPP_PANIC(WGPU_REQUEST_DEVICE_STATUS_UNKNOWN);
+    }
+}
+
+_SOKOL_PRIVATE void _sapp_wgpu_emsc_advance(void) {
+    switch (_sapp.wgpu.init_state) {
+        case _SAPP_WGPU_EMSC_INIT_INITIAL:
+            break;
+
+        case _SAPP_WGPU_EMSC_INIT_REQUEST_ADAPTER:
+            _sapp.wgpu.adapter_cb_fired = false;
+            _sapp.wgpu.pending_adapter = 0;
+            _sapp_wgpu_create_adapter();
+            _sapp.wgpu.init_state = _SAPP_WGPU_EMSC_INIT_WAIT_ADAPTER;
+            break;
+
+        case _SAPP_WGPU_EMSC_INIT_WAIT_ADAPTER:
+            if (!_sapp.wgpu.adapter_cb_fired) {
+                break;
+            }
+            if (_sapp.wgpu.adapter_status != WGPURequestAdapterStatus_Success) {
+                _sapp_wgpu_emsc_fail_adapter(_sapp.wgpu.adapter_status);
+                break;
+            }
+            SOKOL_ASSERT(_sapp.wgpu.pending_adapter);
+            _sapp.wgpu.adapter = _sapp.wgpu.pending_adapter;
+            _sapp.wgpu.pending_adapter = 0;
+            _sapp.wgpu.adapter_cb_fired = false;
+            _sapp.wgpu.init_state = _SAPP_WGPU_EMSC_INIT_REQUEST_DEVICE;
+            break;
+
+        case _SAPP_WGPU_EMSC_INIT_REQUEST_DEVICE:
+            _sapp.wgpu.device_cb_fired = false;
+            _sapp.wgpu.pending_device = 0;
+            _sapp_wgpu_create_device_and_swapchain();
+            _sapp.wgpu.init_state = _SAPP_WGPU_EMSC_INIT_WAIT_DEVICE;
+            break;
+
+        case _SAPP_WGPU_EMSC_INIT_WAIT_DEVICE:
+            if (!_sapp.wgpu.device_cb_fired) {
+                break;
+            }
+            if (_sapp.wgpu.device_status != WGPURequestDeviceStatus_Success) {
+                _sapp_wgpu_emsc_fail_device(_sapp.wgpu.device_status);
+                break;
+            }
+            SOKOL_ASSERT(_sapp.wgpu.pending_device);
+            _sapp.wgpu.device = _sapp.wgpu.pending_device;
+            _sapp.wgpu.pending_device = 0;
+            _sapp.wgpu.device_cb_fired = false;
+            _sapp.wgpu.init_state = _SAPP_WGPU_EMSC_INIT_CREATE_SURFACE;
+            break;
+
+        case _SAPP_WGPU_EMSC_INIT_CREATE_SURFACE:
+            _sapp_wgpu_create_swapchain(false);
+            _sapp.wgpu.init_done = true;
+            _sapp.wgpu.init_state = _SAPP_WGPU_EMSC_INIT_DONE;
+            break;
+
+        case _SAPP_WGPU_EMSC_INIT_DONE:
+        case _SAPP_WGPU_EMSC_INIT_FAILED:
+            break;
+    }
+}
+#endif
 
 _SOKOL_PRIVATE void _sapp_wgpu_init(void) {
     SOKOL_ASSERT(0 == _sapp.wgpu.instance);
@@ -4218,15 +4350,19 @@ _SOKOL_PRIVATE void _sapp_wgpu_init(void) {
     if (0 == _sapp.wgpu.instance) {
         _SAPP_PANIC(WGPU_CREATE_INSTANCE_FAILED);
     }
-    // NOTE: on Emscripten, device and swapchain creation are chained in the callacks
-    _sapp_wgpu_create_adapter();
-    #if defined(_SAPP_WGPU_HAS_WAIT)
+    #if defined(_SAPP_EMSCRIPTEN)
+        _sapp.wgpu.init_state = _SAPP_WGPU_EMSC_INIT_REQUEST_ADAPTER;
+    #else
+        _sapp_wgpu_create_adapter();
         _sapp_wgpu_create_device_and_swapchain();
         SOKOL_ASSERT(_sapp.wgpu.init_done);
     #endif
 }
 
 _SOKOL_PRIVATE void _sapp_wgpu_discard(void) {
+    #if defined(_SAPP_EMSCRIPTEN)
+        _sapp.wgpu.teardown = true;
+    #endif
     _sapp_wgpu_discard_swapchain(false);
     if (_sapp.wgpu.device) {
         wgpuDeviceRelease(_sapp.wgpu.device);
@@ -4244,6 +4380,9 @@ _SOKOL_PRIVATE void _sapp_wgpu_discard(void) {
 
 _SOKOL_PRIVATE void _sapp_wgpu_frame(void) {
     wgpuInstanceProcessEvents(_sapp.wgpu.instance);
+    #if defined(_SAPP_EMSCRIPTEN)
+        _sapp_wgpu_emsc_advance();
+    #endif
     if (_sapp.wgpu.init_done) {
         _sapp_frame();
         if (_sapp.wgpu.swapchain_view) {
@@ -8022,10 +8161,10 @@ _SOKOL_PRIVATE EM_BOOL _sapp_emsc_frame_animation_loop(double time, void* userDa
     }
     if (_sapp.quit_ordered) {
         _sapp_emsc_unregister_eventhandlers();
+        _sapp_call_cleanup();
         #if defined(SOKOL_WGPU)
             _sapp_wgpu_discard();
         #endif
-        _sapp_call_cleanup();
         _sapp_discard_state();
         return EM_FALSE;
     }
