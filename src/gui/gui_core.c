@@ -451,7 +451,12 @@ static int main_loop_step_internal(int block_until_frame)
 		// get one tick to display?
 		timediff = (int64_t)((unsigned int)nexttick - SDL_GetTicks());
 		if (timediff < 0 ||
-		    nexttick <= nextframe) { // do ticks when they are due, or before the corresponding frame is shown
+#if defined(__EMSCRIPTEN__)
+		    (block_until_frame && nexttick <= nextframe)) {
+#else
+		    nexttick <= nextframe) {
+#endif
+			// do ticks when they are due, or before the corresponding frame is shown
 			main_loop_state.do_one_tick = 1;
 			gui_ticktime = SDL_GetTicks() - main_loop_state.gui_last_tick;
 			main_loop_state.gui_last_tick = SDL_GetTicks();

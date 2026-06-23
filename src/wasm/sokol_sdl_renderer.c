@@ -7,6 +7,7 @@
 #endif
 
 #include <stdbool.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -25,15 +26,65 @@ static bool g_texture_contract_initialized;
 
 extern int astonia_wasm_render_begin_count;
 extern int astonia_wasm_render_present_count;
+extern int astonia_wasm_render_present_after_login_count;
 extern int astonia_wasm_render_present_failure_count;
 extern int astonia_wasm_texture_create_count;
 extern int astonia_wasm_texture_upload_count;
+extern int astonia_wasm_texture_upload_failure_count;
+extern int astonia_wasm_texture_upload_context_sprite;
+extern int astonia_wasm_texture_upload_first_failure_code;
+extern int astonia_wasm_texture_upload_first_failure_sprite;
+extern int astonia_wasm_texture_upload_first_failure_width;
+extern int astonia_wasm_texture_upload_first_failure_height;
+extern int astonia_wasm_texture_upload_first_failure_pitch;
+extern int astonia_wasm_texture_upload_first_failure_row;
+extern int astonia_wasm_texture_upload_first_failure_rect_x;
+extern int astonia_wasm_texture_upload_first_failure_rect_y;
+extern int astonia_wasm_texture_upload_first_failure_rect_w;
+extern int astonia_wasm_texture_upload_first_failure_rect_h;
+extern int astonia_wasm_texture_upload_sample_count;
+extern int astonia_wasm_texture_upload_nontransparent_sample_count;
+extern int astonia_wasm_texture_upload_last_sample_count;
+extern int astonia_wasm_texture_upload_last_nontransparent_sample_count;
+extern int astonia_wasm_texture_upload_last_width;
+extern int astonia_wasm_texture_upload_last_height;
 extern int astonia_wasm_texture_blit_count;
+extern int astonia_wasm_texture_blit_visible_count;
+extern int astonia_wasm_texture_blit_offscreen_count;
+extern int astonia_wasm_texture_blit_zero_alpha_count;
+extern int astonia_wasm_texture_blit_after_login_count;
+extern int astonia_wasm_texture_blit_last_x;
+extern int astonia_wasm_texture_blit_last_y;
+extern int astonia_wasm_texture_blit_last_w;
+extern int astonia_wasm_texture_blit_last_h;
+extern int astonia_wasm_texture_blit_bounds_min_x;
+extern int astonia_wasm_texture_blit_bounds_min_y;
+extern int astonia_wasm_texture_blit_bounds_max_x;
+extern int astonia_wasm_texture_blit_bounds_max_y;
 extern int astonia_wasm_texture_job_queue_count;
 extern int astonia_wasm_texture_job_queue_peak;
 extern int astonia_wasm_texture_job_enqueue_count;
 extern int astonia_wasm_texture_job_drop_count;
 extern int astonia_wasm_texture_cpu_work_count;
+extern int astonia_wasm_backend_texture_create_failure_count;
+extern int astonia_wasm_backend_texture_create_image_failure_count;
+extern int astonia_wasm_backend_texture_create_view_failure_count;
+extern int astonia_wasm_backend_image_pool_size;
+extern int astonia_wasm_backend_view_pool_size;
+extern int astonia_wasm_backend_bindgroups_cache_size;
+extern int astonia_wasm_backend_texture_update_count;
+extern int astonia_wasm_backend_texture_update_failure_count;
+extern int astonia_wasm_backend_textured_draw_count;
+extern int astonia_wasm_backend_textured_draw_failure_count;
+extern int astonia_wasm_backend_primitive_draw_count;
+extern int astonia_wasm_backend_primitive_draw_failure_count;
+extern int astonia_wasm_backend_submit_count;
+extern int astonia_wasm_backend_submit_failure_count;
+extern int login_done;
+extern int sockstate;
+
+static int g_surface_width;
+static int g_surface_height;
 
 typedef struct sdl_backend_texture {
 	AstoniaRendererTexture texture;
@@ -46,15 +97,170 @@ static void reset_smoke_progress_counters(void)
 {
 	astonia_wasm_render_begin_count = 0;
 	astonia_wasm_render_present_count = 0;
+	astonia_wasm_render_present_after_login_count = 0;
 	astonia_wasm_render_present_failure_count = 0;
 	astonia_wasm_texture_create_count = 0;
 	astonia_wasm_texture_upload_count = 0;
+	astonia_wasm_texture_upload_failure_count = 0;
+	astonia_wasm_texture_upload_context_sprite = -1;
+	astonia_wasm_texture_upload_first_failure_code = 0;
+	astonia_wasm_texture_upload_first_failure_sprite = -1;
+	astonia_wasm_texture_upload_first_failure_width = 0;
+	astonia_wasm_texture_upload_first_failure_height = 0;
+	astonia_wasm_texture_upload_first_failure_pitch = 0;
+	astonia_wasm_texture_upload_first_failure_row = -1;
+	astonia_wasm_texture_upload_first_failure_rect_x = 0;
+	astonia_wasm_texture_upload_first_failure_rect_y = 0;
+	astonia_wasm_texture_upload_first_failure_rect_w = 0;
+	astonia_wasm_texture_upload_first_failure_rect_h = 0;
+	astonia_wasm_texture_upload_sample_count = 0;
+	astonia_wasm_texture_upload_nontransparent_sample_count = 0;
+	astonia_wasm_texture_upload_last_sample_count = 0;
+	astonia_wasm_texture_upload_last_nontransparent_sample_count = 0;
+	astonia_wasm_texture_upload_last_width = 0;
+	astonia_wasm_texture_upload_last_height = 0;
 	astonia_wasm_texture_blit_count = 0;
+	astonia_wasm_texture_blit_visible_count = 0;
+	astonia_wasm_texture_blit_offscreen_count = 0;
+	astonia_wasm_texture_blit_zero_alpha_count = 0;
+	astonia_wasm_texture_blit_after_login_count = 0;
+	astonia_wasm_texture_blit_last_x = 0;
+	astonia_wasm_texture_blit_last_y = 0;
+	astonia_wasm_texture_blit_last_w = 0;
+	astonia_wasm_texture_blit_last_h = 0;
+	astonia_wasm_texture_blit_bounds_min_x = 0;
+	astonia_wasm_texture_blit_bounds_min_y = 0;
+	astonia_wasm_texture_blit_bounds_max_x = 0;
+	astonia_wasm_texture_blit_bounds_max_y = 0;
 	astonia_wasm_texture_job_queue_count = 0;
 	astonia_wasm_texture_job_queue_peak = 0;
 	astonia_wasm_texture_job_enqueue_count = 0;
 	astonia_wasm_texture_job_drop_count = 0;
 	astonia_wasm_texture_cpu_work_count = 0;
+	astonia_wasm_backend_texture_create_failure_count = 0;
+	astonia_wasm_backend_texture_create_image_failure_count = 0;
+	astonia_wasm_backend_texture_create_view_failure_count = 0;
+	astonia_wasm_backend_image_pool_size = 0;
+	astonia_wasm_backend_view_pool_size = 0;
+	astonia_wasm_backend_bindgroups_cache_size = 0;
+	astonia_wasm_backend_texture_update_count = 0;
+	astonia_wasm_backend_texture_update_failure_count = 0;
+	astonia_wasm_backend_textured_draw_count = 0;
+	astonia_wasm_backend_textured_draw_failure_count = 0;
+	astonia_wasm_backend_primitive_draw_count = 0;
+	astonia_wasm_backend_primitive_draw_failure_count = 0;
+	astonia_wasm_backend_submit_count = 0;
+	astonia_wasm_backend_submit_failure_count = 0;
+}
+
+static int size_to_smoke_int(size_t value)
+{
+	return value > (size_t)INT_MAX ? INT_MAX : (int)value;
+}
+
+static void note_texture_upload_failure(int code, int width, int height, size_t pitch_bytes, int row, int rect_x,
+    int rect_y, int rect_w, int rect_h)
+{
+	if (astonia_wasm_texture_upload_first_failure_code != 0) {
+		return;
+	}
+
+	astonia_wasm_texture_upload_first_failure_code = code;
+	astonia_wasm_texture_upload_first_failure_sprite = astonia_wasm_texture_upload_context_sprite;
+	astonia_wasm_texture_upload_first_failure_width = width;
+	astonia_wasm_texture_upload_first_failure_height = height;
+	astonia_wasm_texture_upload_first_failure_pitch = size_to_smoke_int(pitch_bytes);
+	astonia_wasm_texture_upload_first_failure_row = row;
+	astonia_wasm_texture_upload_first_failure_rect_x = rect_x;
+	astonia_wasm_texture_upload_first_failure_rect_y = rect_y;
+	astonia_wasm_texture_upload_first_failure_rect_w = rect_w;
+	astonia_wasm_texture_upload_first_failure_rect_h = rect_h;
+}
+
+static void note_texture_upload_samples(int width, int height, const uint8_t *rgba, size_t pitch_bytes)
+{
+	const int max_samples = 4096;
+	int total_pixels;
+	int stride;
+	int samples = 0;
+	int nontransparent = 0;
+
+	if (width <= 0 || height <= 0 || !rgba || pitch_bytes < (size_t)width * 4u) {
+		return;
+	}
+
+	total_pixels = width * height;
+	stride = total_pixels > max_samples ? (total_pixels + max_samples - 1) / max_samples : 1;
+	for (int i = 0; i < total_pixels; i += stride) {
+		int x = i % width;
+		int y = i / width;
+		const uint8_t *pixel = rgba + (size_t)y * pitch_bytes + (size_t)x * 4u;
+		samples++;
+		if (pixel[3] != 0u) {
+			nontransparent++;
+		}
+	}
+
+	astonia_wasm_texture_upload_sample_count += samples;
+	astonia_wasm_texture_upload_nontransparent_sample_count += nontransparent;
+	astonia_wasm_texture_upload_last_sample_count = samples;
+	astonia_wasm_texture_upload_last_nontransparent_sample_count = nontransparent;
+	astonia_wasm_texture_upload_last_width = width;
+	astonia_wasm_texture_upload_last_height = height;
+}
+
+static void note_blit_rect(const SdlBackendRect *dst, uint8_t alpha)
+{
+	int x0, y0, x1, y1;
+	int visible_x0, visible_y0, visible_x1, visible_y1;
+
+	if (!dst) {
+		return;
+	}
+
+	x0 = (int)dst->x;
+	y0 = (int)dst->y;
+	x1 = (int)(dst->x + dst->w);
+	y1 = (int)(dst->y + dst->h);
+	astonia_wasm_texture_blit_last_x = x0;
+	astonia_wasm_texture_blit_last_y = y0;
+	astonia_wasm_texture_blit_last_w = x1 - x0;
+	astonia_wasm_texture_blit_last_h = y1 - y0;
+	if (alpha == 0u) {
+		astonia_wasm_texture_blit_zero_alpha_count++;
+	}
+
+	visible_x0 = x0 < 0 ? 0 : x0;
+	visible_y0 = y0 < 0 ? 0 : y0;
+	visible_x1 = x1 > g_surface_width ? g_surface_width : x1;
+	visible_y1 = y1 > g_surface_height ? g_surface_height : y1;
+	if (alpha != 0u && visible_x0 < visible_x1 && visible_y0 < visible_y1) {
+		astonia_wasm_texture_blit_visible_count++;
+		if (astonia_wasm_texture_blit_bounds_max_x == 0 && astonia_wasm_texture_blit_bounds_max_y == 0) {
+			astonia_wasm_texture_blit_bounds_min_x = visible_x0;
+			astonia_wasm_texture_blit_bounds_min_y = visible_y0;
+			astonia_wasm_texture_blit_bounds_max_x = visible_x1;
+			astonia_wasm_texture_blit_bounds_max_y = visible_y1;
+		} else {
+			if (visible_x0 < astonia_wasm_texture_blit_bounds_min_x) {
+				astonia_wasm_texture_blit_bounds_min_x = visible_x0;
+			}
+			if (visible_y0 < astonia_wasm_texture_blit_bounds_min_y) {
+				astonia_wasm_texture_blit_bounds_min_y = visible_y0;
+			}
+			if (visible_x1 > astonia_wasm_texture_blit_bounds_max_x) {
+				astonia_wasm_texture_blit_bounds_max_x = visible_x1;
+			}
+			if (visible_y1 > astonia_wasm_texture_blit_bounds_max_y) {
+				astonia_wasm_texture_blit_bounds_max_y = visible_y1;
+			}
+		}
+		if (login_done && sockstate == 4) {
+			astonia_wasm_texture_blit_after_login_count++;
+		}
+	} else {
+		astonia_wasm_texture_blit_offscreen_count++;
+	}
 }
 
 static int sdl_backend_budget_allows_more(uint64_t deadline_ticks, int did_work)
@@ -74,6 +280,8 @@ int sdl_init(int width, int height, char *title, int monitor)
 
 	g_renderer = astonia_sokol_webgpu_renderer_backend();
 	g_frame_open = false;
+	g_surface_width = width;
+	g_surface_height = height;
 	sdl_frames = 0;
 	if (!g_renderer->init(width, height, title, monitor)) {
 		astonia_wasm_platform_shell_shutdown();
@@ -135,6 +343,9 @@ int sdl_render(void)
 
 	sdl_frames++;
 	astonia_wasm_render_present_count++;
+	if (login_done && sockstate == 4) {
+		astonia_wasm_render_present_after_login_count++;
+	}
 	return 1;
 }
 
@@ -259,12 +470,14 @@ SDL_Texture *sdl_backend_create_texture_from_argb8888(
 
 	if (!g_renderer || !g_renderer->create_texture || width <= 0 || height <= 0 || !pixels ||
 	    !sdl_backend_argb8888_pitch_is_valid(width, pitch_bytes)) {
+		note_texture_upload_failure(7, width, height, pitch_bytes, -1, 0, 0, width, height);
 		return NULL;
 	}
 
 	row_bytes = (size_t)width * 4u;
 	rgba = malloc(row_bytes * (size_t)height);
 	if (!rgba) {
+		note_texture_upload_failure(8, width, height, pitch_bytes, -1, 0, 0, width, height);
 		return NULL;
 	}
 
@@ -276,9 +489,12 @@ SDL_Texture *sdl_backend_create_texture_from_argb8888(
 	desc.width = width;
 	desc.height = height;
 	desc.format = ASTONIA_RENDERER_TEXTURE_FORMAT_RGBA8888;
+	note_texture_upload_samples(width, height, rgba, row_bytes);
 	renderer_texture = g_renderer->create_texture(&desc, rgba, row_bytes);
 	free(rgba);
 	if (renderer_texture.id == ASTONIA_RENDERER_TEXTURE_INVALID.id) {
+		astonia_wasm_texture_upload_failure_count++;
+		note_texture_upload_failure(9, width, height, row_bytes, -1, 0, 0, width, height);
 		return NULL;
 	}
 
@@ -304,6 +520,7 @@ static SdlBackendTexture *sdl_backend_create_empty_rgba_texture(int width, int h
 	AstoniaRendererTexture renderer_texture;
 
 	if (!g_renderer || !g_renderer->create_texture || width <= 0 || height <= 0) {
+		note_texture_upload_failure(2, width, height, 0u, -1, 0, 0, width, height);
 		return NULL;
 	}
 
@@ -312,12 +529,14 @@ static SdlBackendTexture *sdl_backend_create_empty_rgba_texture(int width, int h
 	desc.format = ASTONIA_RENDERER_TEXTURE_FORMAT_RGBA8888;
 	renderer_texture = g_renderer->create_texture(&desc, NULL, 0u);
 	if (renderer_texture.id == ASTONIA_RENDERER_TEXTURE_INVALID.id) {
+		note_texture_upload_failure(3, width, height, 0u, -1, 0, 0, width, height);
 		return NULL;
 	}
 
 	texture = malloc(sizeof(*texture));
 	if (!texture) {
 		g_renderer->destroy_texture(renderer_texture);
+		note_texture_upload_failure(4, width, height, 0u, -1, 0, 0, width, height);
 		return NULL;
 	}
 	texture->texture = renderer_texture;
@@ -339,6 +558,7 @@ int sdl_backend_upload_texture_argb8888_frame_budget_step(SdlBackendTextureUploa
 	}
 	if (!state || !out_texture || !pixels || width <= 0 || height <= 0 ||
 	    !sdl_backend_argb8888_pitch_is_valid(width, pitch_bytes) || !g_renderer || !g_renderer->update_texture) {
+		note_texture_upload_failure(1, width, height, pitch_bytes, -1, 0, 0, width, height);
 		return -1;
 	}
 
@@ -352,6 +572,8 @@ int sdl_backend_upload_texture_argb8888_frame_budget_step(SdlBackendTextureUploa
 	if (!state->texture) {
 		state->texture = sdl_backend_create_empty_rgba_texture(width, height);
 		if (!state->texture) {
+			astonia_wasm_texture_upload_failure_count++;
+			note_texture_upload_failure(3, width, height, 0u, -1, 0, 0, width, height);
 			return -1;
 		}
 	}
@@ -359,6 +581,7 @@ int sdl_backend_upload_texture_argb8888_frame_budget_step(SdlBackendTextureUploa
 		state->row_rgba = malloc(row_bytes);
 		if (!state->row_rgba) {
 			sdl_backend_upload_texture_argb8888_dispose(state);
+			note_texture_upload_failure(5, width, height, row_bytes, state->next_y, 0, state->next_y, width, 1);
 			return -1;
 		}
 	}
@@ -374,7 +597,10 @@ int sdl_backend_upload_texture_argb8888_frame_budget_step(SdlBackendTextureUploa
 		};
 
 		astonia_renderer_argb8888_to_rgba8888(state->row_rgba, (const uint32_t *)row, (size_t)width);
+		note_texture_upload_samples(width, 1, state->row_rgba, row_bytes);
 		if (!g_renderer->update_texture(texture->texture, &rect, state->row_rgba, row_bytes)) {
+			astonia_wasm_texture_upload_failure_count++;
+			note_texture_upload_failure(6, width, height, row_bytes, state->next_y, 0, state->next_y, width, 1);
 			sdl_backend_upload_texture_argb8888_dispose(state);
 			return -1;
 		}
@@ -473,6 +699,7 @@ int sdl_backend_blit_texture(SDL_Texture *raw_texture, const SdlBackendRect *src
 		return 0;
 	}
 
+	note_blit_rect(dst, texture->alpha);
 	astonia_wasm_texture_blit_count++;
 	return 1;
 }

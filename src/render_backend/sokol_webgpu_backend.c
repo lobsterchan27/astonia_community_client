@@ -77,14 +77,66 @@ typedef struct screen_vs_params {
 static SokolWebgpuState g_sokol_webgpu;
 
 #define SOKOL_MAX_TEXTURES          16384
+#define SOKOL_RESOURCE_POOL_SIZE    SOKOL_MAX_TEXTURES
 #define SOKOL_SPRITE_VERTEX_BYTES   (4 * 1024 * 1024)
 #define SOKOL_SOLID_VERTEX_BYTES    (4 * 1024 * 1024)
 #define SOKOL_BLEND_MODE_COUNT       5
 #define SOKOL_SPRITE_VERTEX_COUNT   6
 #define SOKOL_SPRITE_TRIANGLE_COUNT 6
+#define SOKOL_WGPU_BINDGROUPS_CACHE_SIZE 16384
 
 static SokolTextureSlot g_texture_slots[SOKOL_MAX_TEXTURES];
 static uint32_t g_next_texture_id = 1u;
+
+extern int astonia_wasm_backend_texture_update_count;
+extern int astonia_wasm_backend_texture_update_failure_count;
+extern int astonia_wasm_backend_texture_create_failure_count;
+extern int astonia_wasm_backend_texture_create_image_failure_count;
+extern int astonia_wasm_backend_texture_create_view_failure_count;
+extern int astonia_wasm_backend_image_pool_size;
+extern int astonia_wasm_backend_view_pool_size;
+extern int astonia_wasm_backend_bindgroups_cache_size;
+extern int astonia_wasm_backend_textured_draw_count;
+extern int astonia_wasm_backend_textured_draw_failure_count;
+extern int astonia_wasm_backend_primitive_draw_count;
+extern int astonia_wasm_backend_primitive_draw_failure_count;
+extern int astonia_wasm_backend_submit_count;
+extern int astonia_wasm_backend_submit_failure_count;
+extern int astonia_wasm_texture_upload_context_sprite;
+extern int astonia_wasm_texture_upload_first_failure_code;
+extern int astonia_wasm_texture_upload_first_failure_sprite;
+extern int astonia_wasm_texture_upload_first_failure_width;
+extern int astonia_wasm_texture_upload_first_failure_height;
+extern int astonia_wasm_texture_upload_first_failure_pitch;
+extern int astonia_wasm_texture_upload_first_failure_row;
+extern int astonia_wasm_texture_upload_first_failure_rect_x;
+extern int astonia_wasm_texture_upload_first_failure_rect_y;
+extern int astonia_wasm_texture_upload_first_failure_rect_w;
+extern int astonia_wasm_texture_upload_first_failure_rect_h;
+
+static int size_to_smoke_int(size_t value)
+{
+	return value > (size_t)INT_MAX ? INT_MAX : (int)value;
+}
+
+static void note_backend_upload_failure(int code, int width, int height, size_t pitch_bytes, int row, int rect_x,
+    int rect_y, int rect_w, int rect_h)
+{
+	if (astonia_wasm_texture_upload_first_failure_code != 0) {
+		return;
+	}
+
+	astonia_wasm_texture_upload_first_failure_code = code;
+	astonia_wasm_texture_upload_first_failure_sprite = astonia_wasm_texture_upload_context_sprite;
+	astonia_wasm_texture_upload_first_failure_width = width;
+	astonia_wasm_texture_upload_first_failure_height = height;
+	astonia_wasm_texture_upload_first_failure_pitch = size_to_smoke_int(pitch_bytes);
+	astonia_wasm_texture_upload_first_failure_row = row;
+	astonia_wasm_texture_upload_first_failure_rect_x = rect_x;
+	astonia_wasm_texture_upload_first_failure_rect_y = rect_y;
+	astonia_wasm_texture_upload_first_failure_rect_w = rect_w;
+	astonia_wasm_texture_upload_first_failure_rect_h = rect_h;
+}
 
 static const char g_sprite_shader_wgsl[] =
     "struct VsParams {\n"
@@ -444,8 +496,17 @@ static int sokol_webgpu_init(int width, int height, const char *title, int monit
 
 	g_sokol_webgpu.environment = sglue_environment();
 	desc.environment = g_sokol_webgpu.environment;
+	desc.image_pool_size = SOKOL_RESOURCE_POOL_SIZE;
+	desc.view_pool_size = SOKOL_RESOURCE_POOL_SIZE;
+	desc.wgpu.bindgroups_cache_size = SOKOL_WGPU_BINDGROUPS_CACHE_SIZE;
 	desc.logger.func = slog_func;
 	sg_setup(&desc);
+	{
+		sg_desc resolved_desc = sg_query_desc();
+		astonia_wasm_backend_image_pool_size = resolved_desc.image_pool_size;
+		astonia_wasm_backend_view_pool_size = resolved_desc.view_pool_size;
+		astonia_wasm_backend_bindgroups_cache_size = resolved_desc.wgpu.bindgroups_cache_size;
+	}
 
 	if (!sg_isvalid()) {
 		g_sokol_webgpu.initialized = false;
@@ -535,11 +596,17 @@ static int sokol_webgpu_begin_frame(AstoniaRendererClearColor clear_color)
 static int sokol_webgpu_end_frame(void)
 {
 	if (!g_sokol_webgpu.initialized) {
+		astonia_wasm_backend_submit_failure_count++;
 		return 0;
 	}
 
 	sg_end_pass();
 	sg_commit();
+	if (!sg_isvalid()) {
+		astonia_wasm_backend_submit_failure_count++;
+		return 0;
+	}
+	astonia_wasm_backend_submit_count++;
 	g_sokol_webgpu.frames++;
 	return 1;
 }
@@ -563,11 +630,16 @@ static AstoniaRendererTexture sokol_webgpu_create_texture(
 	    (pixels && pitch_bytes == 0u) || (!pixels && pitch_bytes != 0u) ||
 	    (desc->format != ASTONIA_RENDERER_TEXTURE_FORMAT_ARGB8888 &&
 	        desc->format != ASTONIA_RENDERER_TEXTURE_FORMAT_RGBA8888)) {
+		astonia_wasm_backend_texture_create_failure_count++;
+		note_backend_upload_failure(101, desc ? desc->width : 0, desc ? desc->height : 0, pitch_bytes, -1, 0, 0,
+		    desc ? desc->width : 0, desc ? desc->height : 0);
 		return texture;
 	}
 
 	slot = find_free_texture_slot();
 	if (!slot) {
+		astonia_wasm_backend_texture_create_failure_count++;
+		note_backend_upload_failure(102, desc->width, desc->height, pitch_bytes, -1, 0, 0, desc->width, desc->height);
 		return texture;
 	}
 
@@ -578,6 +650,9 @@ static AstoniaRendererTexture sokol_webgpu_create_texture(
 	image_desc.label = "astonia-sprite-texture";
 	slot->image = sg_make_image(&image_desc);
 	if (sg_query_image_state(slot->image) != SG_RESOURCESTATE_VALID) {
+		astonia_wasm_backend_texture_create_failure_count++;
+		astonia_wasm_backend_texture_create_image_failure_count++;
+		note_backend_upload_failure(103, desc->width, desc->height, pitch_bytes, -1, 0, 0, desc->width, desc->height);
 		memset(slot, 0, sizeof(*slot));
 		return texture;
 	}
@@ -586,6 +661,9 @@ static AstoniaRendererTexture sokol_webgpu_create_texture(
 	view_desc.label = "astonia-sprite-texture-view";
 	slot->view = sg_make_view(&view_desc);
 	if (sg_query_view_state(slot->view) != SG_RESOURCESTATE_VALID) {
+		astonia_wasm_backend_texture_create_failure_count++;
+		astonia_wasm_backend_texture_create_view_failure_count++;
+		note_backend_upload_failure(104, desc->width, desc->height, pitch_bytes, -1, 0, 0, desc->width, desc->height);
 		sg_destroy_image(slot->image);
 		memset(slot, 0, sizeof(*slot));
 		return texture;
@@ -598,6 +676,8 @@ static AstoniaRendererTexture sokol_webgpu_create_texture(
 	texture.id = slot->id;
 
 	if (pixels && !update_texture_full(slot, desc, pixels, pitch_bytes)) {
+		astonia_wasm_backend_texture_create_failure_count++;
+		note_backend_upload_failure(105, desc->width, desc->height, pitch_bytes, -1, 0, 0, desc->width, desc->height);
 		sokol_webgpu_destroy_texture(texture);
 		return ASTONIA_RENDERER_TEXTURE_INVALID;
 	}
@@ -616,11 +696,15 @@ static int sokol_webgpu_update_texture(
 	int x, y, width, height;
 
 	if (!g_sokol_webgpu.initialized || !rect || !pixels || pitch_bytes == 0u) {
+		astonia_wasm_backend_texture_update_failure_count++;
+		note_backend_upload_failure(201, 0, 0, pitch_bytes, -1, 0, 0, 0, 0);
 		return 0;
 	}
 
 	slot = find_texture_slot(texture);
 	if (!slot) {
+		astonia_wasm_backend_texture_update_failure_count++;
+		note_backend_upload_failure(202, 0, 0, pitch_bytes, -1, 0, 0, 0, 0);
 		return 0;
 	}
 
@@ -630,6 +714,8 @@ static int sokol_webgpu_update_texture(
 	height = (int)rect->h;
 	if (rect->x != (float)x || rect->y != (float)y || rect->w != (float)width || rect->h != (float)height || x < 0 ||
 	    y < 0 || width <= 0 || height <= 0 || x + width > slot->width || y + height > slot->height) {
+		astonia_wasm_backend_texture_update_failure_count++;
+		note_backend_upload_failure(203, slot->width, slot->height, pitch_bytes, y, x, y, width, height);
 		return 0;
 	}
 
@@ -637,11 +723,19 @@ static int sokol_webgpu_update_texture(
 	desc.height = height;
 	desc.format = slot->source_format;
 	if (!prepare_rgba_pixels(&desc, pixels, pitch_bytes, &allocated, &upload_pixels, &upload_pitch)) {
+		astonia_wasm_backend_texture_update_failure_count++;
+		note_backend_upload_failure(204, slot->width, slot->height, pitch_bytes, y, x, y, width, height);
 		return 0;
 	}
 
 	int ok = astonia_sokol_webgpu_update_image_region(slot->image, x, y, width, height, upload_pixels, upload_pitch);
 	free(allocated);
+	if (ok) {
+		astonia_wasm_backend_texture_update_count++;
+	} else {
+		astonia_wasm_backend_texture_update_failure_count++;
+		note_backend_upload_failure(205, slot->width, slot->height, pitch_bytes, y, x, y, width, height);
+	}
 	return ok;
 }
 
@@ -672,11 +766,13 @@ static int sokol_webgpu_draw_textured_quad(
 	if (!g_sokol_webgpu.initialized || !vertices || !pipeline.id ||
 	    !g_sokol_webgpu.sprite_vertex_buffer.id || !g_sokol_webgpu.sprite_sampler.id || g_sokol_webgpu.width <= 0 ||
 	    g_sokol_webgpu.height <= 0) {
+		astonia_wasm_backend_textured_draw_failure_count++;
 		return 0;
 	}
 
 	slot = find_texture_slot(texture);
 	if (!slot) {
+		astonia_wasm_backend_textured_draw_failure_count++;
 		return 0;
 	}
 
@@ -697,6 +793,7 @@ static int sokol_webgpu_draw_textured_quad(
 
 	vertex_offset = sg_append_buffer(g_sokol_webgpu.sprite_vertex_buffer, SG_RANGE_REF(sprite_vertices));
 	if (sg_query_buffer_overflow(g_sokol_webgpu.sprite_vertex_buffer)) {
+		astonia_wasm_backend_textured_draw_failure_count++;
 		return 0;
 	}
 
@@ -715,6 +812,7 @@ static int sokol_webgpu_draw_textured_quad(
 	sg_apply_bindings(&bindings);
 	sg_draw(0, SOKOL_SPRITE_TRIANGLE_COUNT, 1);
 
+	astonia_wasm_backend_textured_draw_count++;
 	return 1;
 }
 
@@ -740,6 +838,7 @@ static int sokol_webgpu_draw_primitive_vertices(sg_pipeline pipeline, const Prim
 	if (!g_sokol_webgpu.initialized || !pipeline.id || !g_sokol_webgpu.solid_vertex_buffer.id || !vertices ||
 	    vertex_count == 0u || vertex_count > (size_t)INT_MAX || g_sokol_webgpu.width <= 0 ||
 	    g_sokol_webgpu.height <= 0) {
+		astonia_wasm_backend_primitive_draw_failure_count++;
 		return 0;
 	}
 
@@ -749,6 +848,7 @@ static int sokol_webgpu_draw_primitive_vertices(sg_pipeline pipeline, const Prim
 	};
 	vertex_offset = sg_append_buffer(g_sokol_webgpu.solid_vertex_buffer, &vertex_range);
 	if (sg_query_buffer_overflow(g_sokol_webgpu.solid_vertex_buffer)) {
+		astonia_wasm_backend_primitive_draw_failure_count++;
 		return 0;
 	}
 
@@ -765,6 +865,7 @@ static int sokol_webgpu_draw_primitive_vertices(sg_pipeline pipeline, const Prim
 	sg_apply_bindings(&bindings);
 	sg_draw(0, (int)vertex_count, 1);
 
+	astonia_wasm_backend_primitive_draw_count++;
 	return 1;
 }
 

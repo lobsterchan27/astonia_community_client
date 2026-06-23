@@ -33,6 +33,7 @@ extern int astonia_wasm_texture_job_queue_peak;
 extern int astonia_wasm_texture_job_enqueue_count;
 extern int astonia_wasm_texture_job_drop_count;
 extern int astonia_wasm_texture_cpu_work_count;
+extern int astonia_wasm_texture_upload_context_sprite;
 
 static void astonia_wasm_note_texture_job_queue(void)
 {
@@ -40,6 +41,11 @@ static void astonia_wasm_note_texture_job_queue(void)
 	if (g_tex_jobs.count > astonia_wasm_texture_job_queue_peak) {
 		astonia_wasm_texture_job_queue_peak = g_tex_jobs.count;
 	}
+}
+
+static void astonia_wasm_note_texture_upload_context(unsigned int sprite)
+{
+	astonia_wasm_texture_upload_context_sprite = (int)sprite;
 }
 #endif
 
@@ -405,6 +411,9 @@ static int texture_upload_ready_one(int *scan_cursor, uint64_t deadline_ticks, i
 			(void)sprite;
 			SDL_Texture *texture = NULL;
 			int result;
+#ifdef __EMSCRIPTEN__
+			astonia_wasm_note_texture_upload_context(sprite);
+#endif
 			result = sdl_backend_upload_texture_argb8888_frame_budget_step(&g_texture_upload_work[cache_index],
 			    slot->xres * sdl_scale, slot->yres * sdl_scale, slot->pixel,
 			    (size_t)slot->xres * sizeof(uint32_t) * (size_t)sdl_scale, deadline_ticks, &texture);

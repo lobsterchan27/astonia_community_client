@@ -20,6 +20,10 @@
 #include "astonia.h"
 #include "sdl/sdl.h"
 #include "sdl/sdl_private.h"
+
+#ifdef __EMSCRIPTEN__
+extern int astonia_wasm_texture_upload_context_sprite;
+#endif
 #include "game/sprite_config.h"
 
 // libpng custom allocator functions - use our MALLOC/FREE macros which switch between mimalloc and malloc
@@ -1981,6 +1985,9 @@ void sdl_make(struct sdl_texture *st, struct sdl_image *si, int preload)
 
 		if (st->xres > 0 && st->yres > 0) {
 #ifdef SDL_USE_RENDER_BACKEND_TEXTURES
+#ifdef __EMSCRIPTEN__
+			astonia_wasm_texture_upload_context_sprite = (int)st->sprite;
+#endif
 			texture = sdl_backend_create_texture_from_argb8888(
 			    st->xres * sdl_scale, st->yres * sdl_scale, st->pixel,
 			    (size_t)st->xres * sizeof(uint32_t) * (size_t)sdl_scale);
