@@ -74,6 +74,47 @@ export default function createAstoniaClientModule(config) {
 }
 `;
 
+const smokeObservableModuleSource = `
+window.nativeSmokeGetterCalls = window.nativeSmokeGetterCalls || [];
+
+function recordSmokeGetter(name) {
+  window.nativeSmokeGetterCalls.push(name);
+  return 0;
+}
+
+export default function createAstoniaClientModule() {
+  return Promise.resolve({
+    _astonia_native_startup_adapter_status() {
+      return 2;
+    },
+    _astonia_native_startup_adapter_startup_result() {
+      return 0;
+    },
+    _astonia_native_startup_adapter_loop_init_result() {
+      return 0;
+    },
+    _astonia_smoke_login_done() {
+      return recordSmokeGetter('loginDone');
+    },
+    _astonia_smoke_sockstate() {
+      return recordSmokeGetter('sockstate');
+    },
+    _astonia_smoke_protocol_version() {
+      return recordSmokeGetter('protocolVersion');
+    },
+    _astonia_smoke_tick() {
+      return recordSmokeGetter('tick');
+    },
+    _astonia_smoke_queued_ticks() {
+      return recordSmokeGetter('queuedTicks');
+    },
+    _astonia_smoke_queue_size() {
+      return recordSmokeGetter('queueSize');
+    }
+  });
+}
+`;
+
 function collectBrowserFailures(page) {
   const failures = [];
 
@@ -111,7 +152,43 @@ function sourceFilesUnder(relativePath) {
 }
 
 function browserHostSourceFiles() {
-  return ['server.mjs', ...sourceFilesUnder('src')];
+  return ['index.html', 'server.mjs', ...sourceFilesUnder('src')];
+}
+
+function sourceWithDocumentedPlatformOnlyVocabulary(relativePath, source) {
+  const allowlist = [
+    {
+      relativePath: 'src/main.js',
+      snippet: 'window.location.protocol',
+      reason: 'URL scheme selection for the platform gateway default, not gameplay protocol handling.'
+    }
+  ];
+
+  let scrubbed = source;
+  for (const entry of allowlist) {
+    if (entry.relativePath !== relativePath) {
+      continue;
+    }
+
+    expect(source, `${relativePath} platform-only allowlist missing: ${entry.reason}`).toContain(entry.snippet);
+    scrubbed = scrubbed.split(entry.snippet).join('');
+  }
+
+  return scrubbed;
+}
+
+async function installIntervalSpy(page) {
+  await page.addInitScript(() => {
+    const nativeSetInterval = window.setInterval.bind(window);
+    window.astoniaIntervalCalls = [];
+    window.setInterval = (callback, delay, ...args) => {
+      window.astoniaIntervalCalls.push({
+        delay: Number(delay),
+        callbackText: String(callback).slice(0, 500)
+      });
+      return nativeSetInterval(callback, delay, ...args);
+    };
+  });
 }
 
 async function installMockWebGpu(page) {
@@ -446,6 +523,51 @@ test('host records structured launch probe events with redacted credentials', as
   expect(JSON.stringify(probe.events)).toContain('<redacted>');
 });
 
+test('default host launch does not start recurring diagnostic sampling', async ({ page }) => {
+  await installMockWebGpu(page);
+  await installIntervalSpy(page);
+  await routeNativeArtifacts(page, { moduleSource: smokeObservableModuleSource });
+
+  await page.goto('/');
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'ready');
+
+  await page.getByRole('button', { name: 'Launch' }).click();
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'running');
+  await page.waitForTimeout(250);
+
+  const observed = await page.evaluate(() => ({
+    probeEnabled: window.astoniaWasmLaunchProbe.enabled,
+    intervalCalls: window.astoniaIntervalCalls,
+    liveSmokeSamplerType: typeof window.astoniaLiveSmokeSampler,
+    smokeGetterCalls: window.nativeSmokeGetterCalls
+  }));
+
+  expect(observed.probeEnabled).toBe(false);
+  expect(observed.intervalCalls).toEqual([]);
+  expect(observed.liveSmokeSamplerType).toBe('undefined');
+  expect(observed.smokeGetterCalls).toEqual([]);
+});
+
+test('debug launch probe may start the pending platform watchdog when requested', async ({ page }) => {
+  await installMockWebGpu(page);
+  await installIntervalSpy(page);
+  await routeNativeArtifacts(page);
+
+  await page.goto('/?astonia_probe=1');
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'ready');
+
+  await page.getByRole('button', { name: 'Launch' }).click();
+  await page.waitForFunction(() => window.nativeLaunchCalls?.length === 1);
+
+  expect(await page.evaluate(() => window.astoniaWasmLaunchProbe.enabled)).toBe(true);
+  expect(await page.evaluate(() => window.astoniaIntervalCalls)).toEqual([
+    expect.objectContaining({ delay: 5000 })
+  ]);
+
+  await page.evaluate(() => window.resolveNativeLaunch());
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'running');
+});
+
 test('host keeps running state when the module emits a stale loading status after resolve', async ({ page }) => {
   await installMockWebGpu(page);
   await routeNativeArtifacts(page, { moduleSource: lateLoadingStatusModuleSource });
@@ -746,6 +868,34 @@ test('browser package only contains the WASM/WebGPU host source', () => {
 test('browser host source stays inside platform-launch boundaries', () => {
   const forbiddenPatterns = [
     {
+      name: 'undocumented protocol vocabulary',
+      pattern: /\bprotocol\b/i
+    },
+    {
+      name: 'login vocabulary',
+      pattern: /\blogin\b/i
+    },
+    {
+      name: 'tick vocabulary',
+      pattern: /\btick\b/i
+    },
+    {
+      name: 'gameplay vocabulary',
+      pattern: /\bgameplay\b/i
+    },
+    {
+      name: 'render vocabulary',
+      pattern: /\brender\b/i
+    },
+    {
+      name: 'recurring diagnostic sampling vocabulary',
+      pattern: /\b(?:diagnostic|sample|poll(?:ing)?)\b/i
+    },
+    {
+      name: 'native smoke observability exports',
+      pattern: /\b_astonia_smoke_[a-z0-9_]+\b/i
+    },
+    {
       name: 'native protocol command constants',
       pattern: /\bCMD_[A-Z0-9_]+\b/
     },
@@ -776,7 +926,10 @@ test('browser host source stays inside platform-launch boundaries', () => {
   ];
 
   for (const relativePath of browserHostSourceFiles()) {
-    const source = readFileSync(resolve(browserRoot, relativePath), 'utf8');
+    const source = sourceWithDocumentedPlatformOnlyVocabulary(
+      relativePath,
+      readFileSync(resolve(browserRoot, relativePath), 'utf8')
+    );
     for (const { name, pattern } of forbiddenPatterns) {
       expect(pattern.test(source), `${relativePath} must not implement ${name}`).toBe(false);
     }

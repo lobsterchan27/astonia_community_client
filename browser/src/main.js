@@ -701,22 +701,24 @@ async function startNativeClient(event) {
     setModuleStatus('loading', 'Loading Native Module', detail);
   }
 
-  owner.watchdog = window.setInterval(() => {
-    if (launchOwner !== owner || owner.aborted || owner.module !== null) {
-      window.clearInterval(owner.watchdog);
-      owner.watchdog = null;
-      return;
-    }
+  if (launchProbe.enabled) {
+    owner.watchdog = window.setInterval(() => {
+      if (launchOwner !== owner || owner.aborted || owner.module !== null) {
+        window.clearInterval(owner.watchdog);
+        owner.watchdog = null;
+        return;
+      }
 
-    recordLaunchProbe(
-      'pending',
-      {
-        pendingMs: Number((performance.now() - owner.pendingStartedAt).toFixed(3)),
-        artifactResourceTiming: artifactResourceTiming()
-      },
-      owner
-    );
-  }, 5000);
+      recordLaunchProbe(
+        'pending',
+        {
+          pendingMs: Number((performance.now() - owner.pendingStartedAt).toFixed(3)),
+          artifactResourceTiming: artifactResourceTiming()
+        },
+        owner
+      );
+    }, 5000);
+  }
 
   try {
     const moduleUrl = `${DIST_MODULE}?t=${Date.now()}`;
