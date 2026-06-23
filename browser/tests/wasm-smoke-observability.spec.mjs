@@ -13,7 +13,18 @@ const smokeGetters = [
   ['protocolVersion', '_astonia_smoke_protocol_version'],
   ['tick', '_astonia_smoke_tick'],
   ['queuedTicks', '_astonia_smoke_queued_ticks'],
-  ['queueSize', '_astonia_smoke_queue_size']
+  ['queueSize', '_astonia_smoke_queue_size'],
+  ['renderBeginCount', '_astonia_smoke_render_begin_count'],
+  ['renderPresentCount', '_astonia_smoke_render_present_count'],
+  ['renderPresentFailureCount', '_astonia_smoke_render_present_failure_count'],
+  ['textureCreateCount', '_astonia_smoke_texture_create_count'],
+  ['textureUploadCount', '_astonia_smoke_texture_upload_count'],
+  ['textureBlitCount', '_astonia_smoke_texture_blit_count'],
+  ['textureJobQueueCount', '_astonia_smoke_texture_job_queue_count'],
+  ['textureJobQueuePeak', '_astonia_smoke_texture_job_queue_peak'],
+  ['textureJobEnqueueCount', '_astonia_smoke_texture_job_enqueue_count'],
+  ['textureJobDropCount', '_astonia_smoke_texture_job_drop_count'],
+  ['textureCpuWorkCount', '_astonia_smoke_texture_cpu_work_count']
 ];
 
 function findEmcc() {
@@ -41,6 +52,7 @@ function findEmcc() {
 function buildHarness(emcc) {
   const exportedFunctions = [
     '_wasm_smoke_harness_seed',
+    '_wasm_smoke_harness_seed_progress',
     ...smokeGetters.map(([, exportName]) => exportName)
   ];
   const args = [
@@ -125,10 +137,22 @@ test.describe('WASM smoke observability harness', () => {
       protocolVersion: 0,
       tick: 0,
       queuedTicks: 0,
-      queueSize: 0
+      queueSize: 0,
+      renderBeginCount: 0,
+      renderPresentCount: 0,
+      renderPresentFailureCount: 0,
+      textureCreateCount: 0,
+      textureUploadCount: 0,
+      textureBlitCount: 0,
+      textureJobQueueCount: 0,
+      textureJobQueuePeak: 0,
+      textureJobEnqueueCount: 0,
+      textureJobDropCount: 0,
+      textureCpuWorkCount: 0
     });
 
     await page.evaluate(() => window.smokeHarness._wasm_smoke_harness_seed(1, 4, 3, 123456, 2, 1));
+    await page.evaluate(() => window.smokeHarness._wasm_smoke_harness_seed_progress(7, 6, 1, 5, 4, 3, 2, 9, 8, 1, 10));
     const observed = await readSmokeState(page);
     expect(observed).toEqual({
       loginDone: 1,
@@ -136,7 +160,18 @@ test.describe('WASM smoke observability harness', () => {
       protocolVersion: 3,
       tick: 123456,
       queuedTicks: 2,
-      queueSize: 1
+      queueSize: 1,
+      renderBeginCount: 7,
+      renderPresentCount: 6,
+      renderPresentFailureCount: 1,
+      textureCreateCount: 5,
+      textureUploadCount: 4,
+      textureBlitCount: 3,
+      textureJobQueueCount: 2,
+      textureJobQueuePeak: 9,
+      textureJobEnqueueCount: 8,
+      textureJobDropCount: 1,
+      textureCpuWorkCount: 10
     });
     expect(await readSmokeState(page)).toEqual(observed);
   });

@@ -1,12 +1,18 @@
 import { expect, test } from '@playwright/test';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import {
+  buildAttributionArtifact,
+  installAttributionProbe,
+  installMockWebGpuAttribution,
+  runAttributionSampling,
+  writeAttributionArtifact
+} from './helpers/attribution-probe.mjs';
 
 const browserRoot = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = resolve(browserRoot, '..');
 const distModulePath = resolve(browserRoot, 'dist/astonia-client.js');
-const smokeArtifactDir = resolve(repoRoot, '.worktree/smoke');
 const smokeSamplePrefix = '[live-smoke-native-sample]';
 const launchProbePrefix = '[DEBUG-wasm-launch-probe]';
 const responsivenessProbePrefix = '[live-smoke-responsiveness-ping]';
@@ -241,21 +247,27 @@ function sampleHasInitialServerData(sample) {
 }
 
 function sampleNativeProgress(page) {
-  return page.evaluate(() => {
-    const module = window.astoniaNativeModule;
-    if (typeof module?._astonia_native_startup_adapter_frame_count !== 'function') {
-      return null;
-    }
+  return evaluateWithTimeout(
+    page,
+    () => {
+      const module = window.astoniaNativeModule;
+      if (typeof module?._astonia_native_startup_adapter_frame_count !== 'function') {
+        return null;
+      }
 
-    return {
-      elapsedMs: Number(performance.now().toFixed(3)),
-      adapterStatus: module._astonia_native_startup_adapter_status(),
-      frameCount: module._astonia_native_startup_adapter_frame_count(),
-      stepCount: module._astonia_native_startup_adapter_step_count?.(),
-      smokeTick: module._astonia_smoke_tick?.(),
-      webSocketUrls: window.astoniaSmokeWebSocketUrls ?? []
-    };
-  });
+      return {
+        elapsedMs: Number(performance.now().toFixed(3)),
+        adapterStatus: module._astonia_native_startup_adapter_status(),
+        frameCount: module._astonia_native_startup_adapter_frame_count(),
+        stepCount: module._astonia_native_startup_adapter_step_count?.(),
+        smokeTick: module._astonia_smoke_tick?.(),
+        webSocketUrls: window.astoniaSmokeWebSocketUrls ?? []
+      };
+    },
+    undefined,
+    responsivenessEvalTimeoutMs,
+    'native progress sample'
+  );
 }
 
 async function evaluateWithTimeout(page, fn, arg, timeoutMs, label) {
@@ -337,8 +349,6 @@ test.describe('WASM browser live smoke', () => {
 
   test('keeps the browser responsive while generated native frames advance through the gateway', async ({ page }, testInfo) => {
     test.setTimeout(responsivenessDurationMs + 25_000);
-    mkdirSync(smokeArtifactDir, { recursive: true });
-    const artifactPrefix = resolve(smokeArtifactDir, `live-smoke-${Date.now()}`);
     const gatewayUrl = process.env.ASTONIA_LIVE_GATEWAY_URL ?? 'ws://127.0.0.1:8787';
     const consoleMessages = [];
     const pageErrors = [];
@@ -348,6 +358,7 @@ test.describe('WASM browser live smoke', () => {
     let progressStart = null;
     let progressEnd = null;
     let webSocketUrls = [];
+    let attributionSampling = null;
     let observedInitialData;
     let resolveInitialData;
     const initialDataPromise = new Promise((resolve) => {
@@ -374,7 +385,8 @@ test.describe('WASM browser live smoke', () => {
     });
     page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error?.message || error)));
 
-    await installMockWebGpu(page);
+    await installAttributionProbe(page);
+    await installMockWebGpuAttribution(page);
     await installResponsivenessProbe(page);
     await page.goto('/?astonia_probe=1');
     await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'ready');
@@ -433,27 +445,39 @@ test.describe('WASM browser live smoke', () => {
 
       progressStart = await sampleNativeProgress(page);
       webSocketUrls = progressStart?.webSocketUrls ?? [];
-      responsivenessPings = await proveBrowserResponsiveness(page, responsivenessDurationMs);
+      attributionSampling = await runAttributionSampling(page, {
+        durationMs: responsivenessDurationMs,
+        pingIntervalMs: responsivenessPingIntervalMs,
+        evaluationTimeoutMs: responsivenessEvalTimeoutMs
+      });
+      responsivenessPings = attributionSampling.pings;
+      if (attributionSampling.browserEvaluationTimedOut) {
+        throw new Error('browser attribution eval probe timed out before native progress end sample');
+      }
       progressEnd = await sampleNativeProgress(page);
       webSocketUrls = await page.evaluate(() => window.astoniaSmokeWebSocketUrls ?? []);
     } finally {
-      const summary = {
-        artifactPrefix,
-        gatewayUrl,
-        responsivenessDurationMs,
-        observedInitialData,
-        progressStart,
-        progressEnd,
-        responsivenessPings,
-        webSocketUrls,
-        samples,
-        launchEvents,
-        consoleMessages,
-        pageErrors
-      };
-      const summaryPath = `${artifactPrefix}.summary.json`;
-      writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
-      await testInfo.attach('live-smoke-summary', { path: summaryPath, contentType: 'application/json' });
+      const artifact = await buildAttributionArtifact(page, {
+        mode: 'live_smoke',
+        inputs: {
+          liveFixtureEnabled: true,
+          gatewayUrl,
+          durationMs: responsivenessDurationMs,
+          evaluationTimeoutMs: responsivenessEvalTimeoutMs,
+          username: process.env.ASTONIA_LIVE_USERNAME ?? 'BrowserSmoke'
+        },
+        pageEvidence: { consoleMessages, pageErrors },
+        sampling: attributionSampling,
+        outcome: {
+          observedInitialData,
+          progressStart,
+          progressEnd,
+          webSocketUrls,
+          samples,
+          launchEvents
+        }
+      });
+      await writeAttributionArtifact(testInfo, artifact, 'live-smoke-attribution');
     }
 
     expect(pageErrors).toEqual([]);

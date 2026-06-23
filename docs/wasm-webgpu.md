@@ -78,6 +78,14 @@ The disposable local server and gateway setup for the future live smoke is
 documented in [WASM Live Fixture](wasm-live-fixture.md). That fixture keeps the
 browser transport byte-pipe based and does not add JavaScript protocol decoding.
 
+## Attribution Probe
+
+The generated-module and live browser attribution probes are documented in
+[WASM Browser Attribution Probe](wasm-browser-attribution.md). They emit a
+single classified JSON artifact under `.worktree/attribution` with host
+responsiveness, WebGPU lifecycle, native exported counters, gateway byte-pipe
+evidence, and the selected freeze/crash ownership bucket.
+
 ## Commands
 
 Install the pinned Emscripten SDK into the ignored repo-local dependency

@@ -669,7 +669,18 @@ test('generated native module exposes smoke observability getters', async ({ pag
 			'_astonia_smoke_protocol_version',
 			'_astonia_smoke_tick',
 			'_astonia_smoke_queued_ticks',
-			'_astonia_smoke_queue_size'
+			'_astonia_smoke_queue_size',
+			'_astonia_smoke_render_begin_count',
+			'_astonia_smoke_render_present_count',
+			'_astonia_smoke_render_present_failure_count',
+			'_astonia_smoke_texture_create_count',
+			'_astonia_smoke_texture_upload_count',
+			'_astonia_smoke_texture_blit_count',
+			'_astonia_smoke_texture_job_queue_count',
+			'_astonia_smoke_texture_job_queue_peak',
+			'_astonia_smoke_texture_job_enqueue_count',
+			'_astonia_smoke_texture_job_drop_count',
+			'_astonia_smoke_texture_cpu_work_count'
 		];
 		const missing = getters.filter((name) => typeof module[name] !== 'function');
 
@@ -683,7 +694,18 @@ test('generated native module exposes smoke observability getters', async ({ pag
 						protocolVersion: module._astonia_smoke_protocol_version(),
 						tick: module._astonia_smoke_tick(),
 						queuedTicks: module._astonia_smoke_queued_ticks(),
-						queueSize: module._astonia_smoke_queue_size()
+						queueSize: module._astonia_smoke_queue_size(),
+						renderBeginCount: module._astonia_smoke_render_begin_count(),
+						renderPresentCount: module._astonia_smoke_render_present_count(),
+						renderPresentFailureCount: module._astonia_smoke_render_present_failure_count(),
+						textureCreateCount: module._astonia_smoke_texture_create_count(),
+						textureUploadCount: module._astonia_smoke_texture_upload_count(),
+						textureBlitCount: module._astonia_smoke_texture_blit_count(),
+						textureJobQueueCount: module._astonia_smoke_texture_job_queue_count(),
+						textureJobQueuePeak: module._astonia_smoke_texture_job_queue_peak(),
+						textureJobEnqueueCount: module._astonia_smoke_texture_job_enqueue_count(),
+						textureJobDropCount: module._astonia_smoke_texture_job_drop_count(),
+						textureCpuWorkCount: module._astonia_smoke_texture_cpu_work_count()
 					}
 		};
 	});
@@ -695,7 +717,18 @@ test('generated native module exposes smoke observability getters', async ({ pag
 		protocolVersion: 0,
 		tick: 0,
 		queuedTicks: 0,
-		queueSize: 0
+		queueSize: 0,
+		renderBeginCount: 0,
+		renderPresentCount: 0,
+		renderPresentFailureCount: 0,
+		textureCreateCount: 0,
+		textureUploadCount: 0,
+		textureBlitCount: 0,
+		textureJobQueueCount: 0,
+		textureJobQueuePeak: 0,
+		textureJobEnqueueCount: 0,
+		textureJobDropCount: 0,
+		textureCpuWorkCount: 0
 	});
 	expect(failures).toEqual([]);
 });

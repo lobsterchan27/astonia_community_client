@@ -37,6 +37,18 @@ ASTONIA_SMOKE_WEAK int lasttick;
 ASTONIA_SMOKE_WEAK int q_size;
 #endif
 
+ASTONIA_SMOKE_WEAK int astonia_wasm_render_begin_count;
+ASTONIA_SMOKE_WEAK int astonia_wasm_render_present_count;
+ASTONIA_SMOKE_WEAK int astonia_wasm_render_present_failure_count;
+ASTONIA_SMOKE_WEAK int astonia_wasm_texture_create_count;
+ASTONIA_SMOKE_WEAK int astonia_wasm_texture_upload_count;
+ASTONIA_SMOKE_WEAK int astonia_wasm_texture_blit_count;
+ASTONIA_SMOKE_WEAK int astonia_wasm_texture_job_queue_count;
+ASTONIA_SMOKE_WEAK int astonia_wasm_texture_job_queue_peak;
+ASTONIA_SMOKE_WEAK int astonia_wasm_texture_job_enqueue_count;
+ASTONIA_SMOKE_WEAK int astonia_wasm_texture_job_drop_count;
+ASTONIA_SMOKE_WEAK int astonia_wasm_texture_cpu_work_count;
+
 ASTONIA_SMOKE_EXPORT int astonia_smoke_login_done(void)
 {
 	return login_done;
@@ -65,4 +77,59 @@ ASTONIA_SMOKE_EXPORT int astonia_smoke_queued_ticks(void)
 ASTONIA_SMOKE_EXPORT int astonia_smoke_queue_size(void)
 {
 	return q_size;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_render_begin_count(void)
+{
+	return astonia_wasm_render_begin_count;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_render_present_count(void)
+{
+	return astonia_wasm_render_present_count;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_render_present_failure_count(void)
+{
+	return astonia_wasm_render_present_failure_count;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_texture_create_count(void)
+{
+	return astonia_wasm_texture_create_count;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_texture_upload_count(void)
+{
+	return astonia_wasm_texture_upload_count;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_texture_blit_count(void)
+{
+	return astonia_wasm_texture_blit_count;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_texture_job_queue_count(void)
+{
+	return astonia_wasm_texture_job_queue_count;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_texture_job_queue_peak(void)
+{
+	return astonia_wasm_texture_job_queue_peak;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_texture_job_enqueue_count(void)
+{
+	return astonia_wasm_texture_job_enqueue_count;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_texture_job_drop_count(void)
+{
+	return astonia_wasm_texture_job_drop_count;
+}
+
+ASTONIA_SMOKE_EXPORT int astonia_smoke_texture_cpu_work_count(void)
+{
+	return astonia_wasm_texture_cpu_work_count;
 }

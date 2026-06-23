@@ -42,6 +42,22 @@ zip_t *sdl_zip2m = NULL;
 SDL_Semaphore *prework = NULL;
 SDL_Mutex *premutex = NULL;
 
+#ifdef __EMSCRIPTEN__
+extern int astonia_wasm_texture_job_queue_count;
+extern int astonia_wasm_texture_job_queue_peak;
+extern int astonia_wasm_texture_job_enqueue_count;
+extern int astonia_wasm_texture_job_drop_count;
+extern int astonia_wasm_texture_cpu_work_count;
+
+static void astonia_wasm_note_texture_job_queue(void)
+{
+	astonia_wasm_texture_job_queue_count = g_tex_jobs.count;
+	if (g_tex_jobs.count > astonia_wasm_texture_job_queue_peak) {
+		astonia_wasm_texture_job_queue_peak = g_tex_jobs.count;
+	}
+}
+#endif
+
 // SDL3_mixer globals
 MIX_Mixer *sdl_mixer = NULL;
 MIX_Track *sdl_tracks[MAX_SOUND_CHANNELS] = {NULL};
@@ -869,6 +885,9 @@ int if_single_thread_process_one_job(void)
 	// Stage 1 + 2
 	sdl_make(tex, &sdli[sprite], 1);
 	sdl_make(tex, &sdli[sprite], 2);
+#ifdef __EMSCRIPTEN__
+	astonia_wasm_texture_cpu_work_count++;
+#endif
 
 	return 1;
 }
@@ -909,6 +928,9 @@ void sdl_pre_add(unsigned int sprite, signed char sink, unsigned char freeze, un
 			if (sdl_ic_load(sprite_id, NULL) >= 0) {
 				sdl_make(slot, &sdli[sprite_id], 1);
 				sdl_make(slot, &sdli[sprite_id], 2);
+#ifdef __EMSCRIPTEN__
+				astonia_wasm_texture_cpu_work_count++;
+#endif
 			}
 		}
 		return;
@@ -933,6 +955,10 @@ void sdl_pre_add(unsigned int sprite, signed char sink, unsigned char freeze, un
 			last_log_time = now;
 		}
 #endif
+#ifdef __EMSCRIPTEN__
+		astonia_wasm_texture_job_drop_count++;
+		astonia_wasm_note_texture_job_queue();
+#endif
 		SDL_UnlockMutex(g_tex_jobs.mutex);
 		return;
 	}
@@ -945,6 +971,10 @@ void sdl_pre_add(unsigned int sprite, signed char sink, unsigned char freeze, un
 
 	g_tex_jobs.tail = (g_tex_jobs.tail + 1) % TEX_JOB_CAPACITY;
 	g_tex_jobs.count++;
+#ifdef __EMSCRIPTEN__
+	astonia_wasm_texture_job_enqueue_count++;
+	astonia_wasm_note_texture_job_queue();
+#endif
 
 	// Mark as queued
 	slot->work_state = TX_WORK_QUEUED;
@@ -1072,6 +1102,9 @@ int sdl_pre_backgnd(void *ptr)
 		// Stage 1 + 2
 		sdl_make(tex, &sdli[sprite], 1);
 		sdl_make(tex, &sdli[sprite], 2);
+#ifdef __EMSCRIPTEN__
+		astonia_wasm_texture_cpu_work_count++;
+#endif
 
 		SDL_LockMutex(g_tex_jobs.mutex);
 		if (tex->generation == job.generation) {

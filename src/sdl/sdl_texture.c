@@ -27,6 +27,19 @@ uint64_t sdl_render_wait = 0;
 uint64_t sdl_render_wait_count = 0;
 #endif
 
+#ifdef __EMSCRIPTEN__
+extern int astonia_wasm_texture_job_queue_count;
+extern int astonia_wasm_texture_job_queue_peak;
+
+static void astonia_wasm_note_texture_job_queue(void)
+{
+	astonia_wasm_texture_job_queue_count = g_tex_jobs.count;
+	if (g_tex_jobs.count > astonia_wasm_texture_job_queue_peak) {
+		astonia_wasm_texture_job_queue_peak = g_tex_jobs.count;
+	}
+}
+#endif
+
 // ============================================================================
 // New texture job queue implementation
 // ============================================================================
@@ -77,6 +90,9 @@ int tex_jobs_pop(texture_job_t *out_job, int should_block)
 	*out_job = q->jobs[head_index];
 	q->head = (q->head + 1) % TEX_JOB_CAPACITY;
 	q->count--;
+#ifdef __EMSCRIPTEN__
+	astonia_wasm_note_texture_job_queue();
+#endif
 
 	// Zero out the popped slot for debugging clarity
 	// (Makes it obvious in debugger/memory dumps when a slot is free vs stale)

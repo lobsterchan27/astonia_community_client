@@ -135,7 +135,9 @@ npm test -- tests/wasm-live-smoke.spec.mjs
 The smoke launches the generated native WASM/Sokol module through the browser
 host, connects through the gateway URL in the form, and keeps probing browser
 evaluation, DOM writes, timer ticks, and native frame counters for at least 25
-seconds. JSON summaries are written under `.worktree/smoke`.
+seconds. Canonical classified JSON summaries are written under
+`.worktree/attribution`; see
+[WASM Browser Attribution Probe](wasm-browser-attribution.md).
 
 ## Fixed Ports
 
