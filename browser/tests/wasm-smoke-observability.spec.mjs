@@ -16,15 +16,59 @@ const smokeGetters = [
   ['queueSize', '_astonia_smoke_queue_size'],
   ['renderBeginCount', '_astonia_smoke_render_begin_count'],
   ['renderPresentCount', '_astonia_smoke_render_present_count'],
+  ['renderPresentAfterLoginCount', '_astonia_smoke_render_present_after_login_count'],
   ['renderPresentFailureCount', '_astonia_smoke_render_present_failure_count'],
   ['textureCreateCount', '_astonia_smoke_texture_create_count'],
   ['textureUploadCount', '_astonia_smoke_texture_upload_count'],
+  ['textureUploadFailureCount', '_astonia_smoke_texture_upload_failure_count'],
+  ['textureUploadFirstFailureCode', '_astonia_smoke_texture_upload_first_failure_code'],
+  ['textureUploadFirstFailureSprite', '_astonia_smoke_texture_upload_first_failure_sprite'],
+  ['textureUploadFirstFailureWidth', '_astonia_smoke_texture_upload_first_failure_width'],
+  ['textureUploadFirstFailureHeight', '_astonia_smoke_texture_upload_first_failure_height'],
+  ['textureUploadFirstFailurePitch', '_astonia_smoke_texture_upload_first_failure_pitch'],
+  ['textureUploadFirstFailureRow', '_astonia_smoke_texture_upload_first_failure_row'],
+  ['textureUploadFirstFailureRectX', '_astonia_smoke_texture_upload_first_failure_rect_x'],
+  ['textureUploadFirstFailureRectY', '_astonia_smoke_texture_upload_first_failure_rect_y'],
+  ['textureUploadFirstFailureRectW', '_astonia_smoke_texture_upload_first_failure_rect_w'],
+  ['textureUploadFirstFailureRectH', '_astonia_smoke_texture_upload_first_failure_rect_h'],
+  ['textureUploadSampleCount', '_astonia_smoke_texture_upload_sample_count'],
+  ['textureUploadNontransparentSampleCount', '_astonia_smoke_texture_upload_nontransparent_sample_count'],
+  ['textureUploadLastSampleCount', '_astonia_smoke_texture_upload_last_sample_count'],
+  ['textureUploadLastNontransparentSampleCount', '_astonia_smoke_texture_upload_last_nontransparent_sample_count'],
+  ['textureUploadLastWidth', '_astonia_smoke_texture_upload_last_width'],
+  ['textureUploadLastHeight', '_astonia_smoke_texture_upload_last_height'],
   ['textureBlitCount', '_astonia_smoke_texture_blit_count'],
+  ['textureBlitVisibleCount', '_astonia_smoke_texture_blit_visible_count'],
+  ['textureBlitOffscreenCount', '_astonia_smoke_texture_blit_offscreen_count'],
+  ['textureBlitZeroAlphaCount', '_astonia_smoke_texture_blit_zero_alpha_count'],
+  ['textureBlitAfterLoginCount', '_astonia_smoke_texture_blit_after_login_count'],
+  ['textureBlitLastX', '_astonia_smoke_texture_blit_last_x'],
+  ['textureBlitLastY', '_astonia_smoke_texture_blit_last_y'],
+  ['textureBlitLastW', '_astonia_smoke_texture_blit_last_w'],
+  ['textureBlitLastH', '_astonia_smoke_texture_blit_last_h'],
+  ['textureBlitBoundsMinX', '_astonia_smoke_texture_blit_bounds_min_x'],
+  ['textureBlitBoundsMinY', '_astonia_smoke_texture_blit_bounds_min_y'],
+  ['textureBlitBoundsMaxX', '_astonia_smoke_texture_blit_bounds_max_x'],
+  ['textureBlitBoundsMaxY', '_astonia_smoke_texture_blit_bounds_max_y'],
   ['textureJobQueueCount', '_astonia_smoke_texture_job_queue_count'],
   ['textureJobQueuePeak', '_astonia_smoke_texture_job_queue_peak'],
   ['textureJobEnqueueCount', '_astonia_smoke_texture_job_enqueue_count'],
   ['textureJobDropCount', '_astonia_smoke_texture_job_drop_count'],
-  ['textureCpuWorkCount', '_astonia_smoke_texture_cpu_work_count']
+  ['textureCpuWorkCount', '_astonia_smoke_texture_cpu_work_count'],
+  ['backendTextureUpdateCount', '_astonia_smoke_backend_texture_update_count'],
+  ['backendTextureUpdateFailureCount', '_astonia_smoke_backend_texture_update_failure_count'],
+  ['backendTextureCreateFailureCount', '_astonia_smoke_backend_texture_create_failure_count'],
+  ['backendTextureCreateImageFailureCount', '_astonia_smoke_backend_texture_create_image_failure_count'],
+  ['backendTextureCreateViewFailureCount', '_astonia_smoke_backend_texture_create_view_failure_count'],
+  ['backendImagePoolSize', '_astonia_smoke_backend_image_pool_size'],
+  ['backendViewPoolSize', '_astonia_smoke_backend_view_pool_size'],
+  ['backendBindgroupsCacheSize', '_astonia_smoke_backend_bindgroups_cache_size'],
+  ['backendTexturedDrawCount', '_astonia_smoke_backend_textured_draw_count'],
+  ['backendTexturedDrawFailureCount', '_astonia_smoke_backend_textured_draw_failure_count'],
+  ['backendPrimitiveDrawCount', '_astonia_smoke_backend_primitive_draw_count'],
+  ['backendPrimitiveDrawFailureCount', '_astonia_smoke_backend_primitive_draw_failure_count'],
+  ['backendSubmitCount', '_astonia_smoke_backend_submit_count'],
+  ['backendSubmitFailureCount', '_astonia_smoke_backend_submit_failure_count']
 ];
 
 function findEmcc() {
@@ -112,6 +156,13 @@ async function readSmokeState(page) {
   }, smokeGetters);
 }
 
+function zeroSmokeState(overrides = {}) {
+  return {
+    ...Object.fromEntries(smokeGetters.map(([key]) => [key, 0])),
+    ...overrides
+  };
+}
+
 const emcc = findEmcc();
 
 test.describe('WASM smoke observability harness', () => {
@@ -131,7 +182,7 @@ test.describe('WASM smoke observability harness', () => {
     );
     expect(exportedSmokeNames).toEqual(smokeGetters.map(([, exportName]) => exportName).sort());
 
-    expect(await readSmokeState(page)).toEqual({
+    expect(await readSmokeState(page)).toEqual(zeroSmokeState({
       loginDone: 0,
       sockstate: 0,
       protocolVersion: 0,
@@ -149,12 +200,12 @@ test.describe('WASM smoke observability harness', () => {
       textureJobEnqueueCount: 0,
       textureJobDropCount: 0,
       textureCpuWorkCount: 0
-    });
+    }));
 
     await page.evaluate(() => window.smokeHarness._wasm_smoke_harness_seed(1, 4, 3, 123456, 2, 1));
     await page.evaluate(() => window.smokeHarness._wasm_smoke_harness_seed_progress(7, 6, 1, 5, 4, 3, 2, 9, 8, 1, 10));
     const observed = await readSmokeState(page);
-    expect(observed).toEqual({
+    expect(observed).toEqual(zeroSmokeState({
       loginDone: 1,
       sockstate: 4,
       protocolVersion: 3,
@@ -172,7 +223,7 @@ test.describe('WASM smoke observability harness', () => {
       textureJobEnqueueCount: 8,
       textureJobDropCount: 1,
       textureCpuWorkCount: 10
-    });
+    }));
     expect(await readSmokeState(page)).toEqual(observed);
   });
 });
