@@ -13,6 +13,12 @@ const SDL_KEYCODE = {
   m: 109,
   arrowUp: 0x40000052
 };
+const SDL_MOUM = {
+  none: 0,
+  leftUp: 1,
+  leftDown: 2,
+  wheel: 7
+};
 
 const inputCaptureModuleSource = `
 window.nativeInputCalls = [];
@@ -30,6 +36,21 @@ export default function createAstoniaClientModule() {
     },
     _astonia_wasm_input_text(codepoint, shift, ctrl, alt) {
       window.nativeInputCalls.push({ type: 'text', codepoint, shift, ctrl, alt });
+    },
+    _astonia_wasm_input_mouse_focus(focused) {
+      window.nativeInputCalls.push({ type: 'mouseFocus', focused });
+    },
+    _astonia_wasm_input_mouse_capture(captured) {
+      window.nativeInputCalls.push({ type: 'mouseCapture', captured });
+    },
+    _astonia_wasm_input_mouse_move(x, y, movementX, movementY, shift, ctrl, alt) {
+      window.nativeInputCalls.push({ type: 'mouseMove', x, y, movementX, movementY, shift, ctrl, alt });
+    },
+    _astonia_wasm_input_mouse_button(x, y, button, pressed, shift, ctrl, alt) {
+      window.nativeInputCalls.push({ type: 'mouseButton', x, y, button, pressed, shift, ctrl, alt });
+    },
+    _astonia_wasm_input_mouse_wheel(x, y, wheelX, wheelY, shift, ctrl, alt) {
+      window.nativeInputCalls.push({ type: 'mouseWheel', x, y, wheelX, wheelY, shift, ctrl, alt });
     },
     _astonia_native_startup_adapter_status() {
       return 2;
@@ -75,14 +96,40 @@ function buildHarness(emcc) {
     '_wasm_input_bridge_harness_last_key_down',
     '_wasm_input_bridge_harness_last_key_up',
     '_wasm_input_bridge_harness_last_text',
+    '_wasm_input_bridge_harness_mouse_count',
+    '_wasm_input_bridge_harness_last_mouse_x',
+    '_wasm_input_bridge_harness_last_mouse_y',
+    '_wasm_input_bridge_harness_last_mouse_what',
     '_wasm_input_bridge_harness_vk_shift',
     '_wasm_input_bridge_harness_vk_control',
     '_wasm_input_bridge_harness_vk_alt',
     '_wasm_input_bridge_harness_sdl_mods',
+    '_wasm_input_bridge_harness_platform_has_focus',
+    '_wasm_input_bridge_harness_platform_check_mouse',
+    '_wasm_input_bridge_harness_platform_capture_request',
+    '_wasm_input_bridge_harness_platform_cursor_warp_request',
+    '_wasm_input_bridge_harness_platform_cursor_request',
+    '_wasm_input_bridge_harness_platform_cursor',
     '_astonia_wasm_input_set_modifiers',
     '_astonia_wasm_input_key_down',
     '_astonia_wasm_input_key_up',
-    '_astonia_wasm_input_text'
+    '_astonia_wasm_input_text',
+    '_astonia_wasm_input_mouse_focus',
+    '_astonia_wasm_input_mouse_capture',
+    '_astonia_wasm_input_mouse_move',
+    '_astonia_wasm_input_mouse_button',
+    '_astonia_wasm_input_mouse_wheel',
+    '_astonia_wasm_input_mouse_event_count',
+    '_astonia_wasm_input_mouse_move_count',
+    '_astonia_wasm_input_mouse_button_down_count',
+    '_astonia_wasm_input_mouse_button_up_count',
+    '_astonia_wasm_input_mouse_wheel_count',
+    '_astonia_wasm_input_mouse_active_buttons',
+    '_astonia_wasm_input_mouse_last_x',
+    '_astonia_wasm_input_mouse_last_y',
+    '_astonia_wasm_input_mouse_last_button',
+    '_astonia_wasm_input_mouse_last_pressed',
+    '_astonia_wasm_input_mouse_last_what'
   ];
   const args = [
     '-std=gnu11',
@@ -239,6 +286,255 @@ test('browser host forwards keyboard, text, and modifier facts to native exports
   );
 });
 
+test('browser host forwards pointer, wheel, focus, and capture facts to native exports', async ({ page }) => {
+  await installMockWebGpu(page);
+  await routeNativeArtifacts(page);
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Launch' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Launch' }).click();
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'running');
+
+  await page.evaluate(() => {
+    window.nativeInputCalls = [];
+  });
+
+  const canvas = page.getByTestId('wasm-client-canvas');
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+
+  const x = box.x + 48;
+  const y = box.y + 56;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.mouse.wheel(0, 120);
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('blur'));
+  });
+
+  const calls = await page.evaluate(() => window.nativeInputCalls);
+
+  expect(calls).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ type: 'mouseFocus', focused: 1 }),
+      expect.objectContaining({ type: 'mouseMove', x: 48, y: 56, shift: 0, ctrl: 0, alt: 0 }),
+      expect.objectContaining({ type: 'mouseCapture', captured: 1 }),
+      expect.objectContaining({ type: 'mouseButton', x: 48, button: 0, pressed: 1, shift: 0, ctrl: 0, alt: 0 }),
+      expect.objectContaining({ type: 'mouseButton', x: 48, button: 0, pressed: 0, shift: 0, ctrl: 0, alt: 0 }),
+      expect.objectContaining({ type: 'mouseCapture', captured: 0 }),
+      expect.objectContaining({ type: 'mouseWheel', wheelX: 0, wheelY: -1, shift: 0, ctrl: 0, alt: 0 }),
+      expect.objectContaining({ type: 'mouseFocus', focused: 0 })
+    ])
+  );
+});
+
+test('browser host releases native buttons on cancel, capture loss, blur, and hidden cleanup', async ({ page }) => {
+  await installMockWebGpu(page);
+  await routeNativeArtifacts(page);
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Launch' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Launch' }).click();
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'running');
+
+  const scenarios = [
+    {
+      name: 'pointercancel',
+      async run(page, pointerId) {
+        await page.evaluate(({ pointerId: id }) => {
+          const canvas = document.querySelector('[data-testid="wasm-client-canvas"]');
+          const rect = canvas.getBoundingClientRect();
+          const eventInit = {
+            bubbles: true,
+            cancelable: true,
+            pointerId: id,
+            pointerType: 'mouse',
+            clientX: rect.left + 64,
+            clientY: rect.top + 72
+          };
+
+          window.nativeInputCalls = [];
+          canvas.dispatchEvent(new PointerEvent('pointerdown', { ...eventInit, button: 0, buttons: 1 }));
+          canvas.dispatchEvent(new MouseEvent('mousedown', { ...eventInit, button: 0, buttons: 1 }));
+          canvas.dispatchEvent(new PointerEvent('pointercancel', { ...eventInit, button: -1, buttons: 0 }));
+        }, { pointerId });
+      }
+    },
+    {
+      name: 'lostpointercapture',
+      async run(page, pointerId) {
+        await page.evaluate(({ pointerId: id }) => {
+          const canvas = document.querySelector('[data-testid="wasm-client-canvas"]');
+          const rect = canvas.getBoundingClientRect();
+          const eventInit = {
+            bubbles: true,
+            cancelable: true,
+            pointerId: id,
+            pointerType: 'mouse',
+            clientX: rect.left + 64,
+            clientY: rect.top + 72
+          };
+
+          window.nativeInputCalls = [];
+          canvas.dispatchEvent(new PointerEvent('pointerdown', { ...eventInit, button: 0, buttons: 1 }));
+          canvas.dispatchEvent(new MouseEvent('mousedown', { ...eventInit, button: 0, buttons: 1 }));
+          canvas.dispatchEvent(new PointerEvent('lostpointercapture', { ...eventInit, button: -1, buttons: 0 }));
+        }, { pointerId });
+      }
+    },
+    {
+      name: 'blur',
+      async run(page, pointerId) {
+        await page.evaluate(({ pointerId: id }) => {
+          const canvas = document.querySelector('[data-testid="wasm-client-canvas"]');
+          const rect = canvas.getBoundingClientRect();
+
+          window.nativeInputCalls = [];
+          canvas.dispatchEvent(
+            new PointerEvent('pointerdown', {
+              bubbles: true,
+              cancelable: true,
+              pointerId: id,
+              pointerType: 'mouse',
+              clientX: rect.left + 64,
+              clientY: rect.top + 72,
+              button: 0,
+              buttons: 1
+            })
+          );
+          canvas.dispatchEvent(
+            new MouseEvent('mousedown', {
+              bubbles: true,
+              cancelable: true,
+              clientX: rect.left + 64,
+              clientY: rect.top + 72,
+              button: 0,
+              buttons: 1
+            })
+          );
+          window.dispatchEvent(new Event('blur'));
+        }, { pointerId });
+      }
+    },
+    {
+      name: 'hidden',
+      async run(page, pointerId) {
+        await page.evaluate(({ pointerId: id }) => {
+          const canvas = document.querySelector('[data-testid="wasm-client-canvas"]');
+          const rect = canvas.getBoundingClientRect();
+
+          window.nativeInputCalls = [];
+          canvas.dispatchEvent(
+            new PointerEvent('pointerdown', {
+              bubbles: true,
+              cancelable: true,
+              pointerId: id,
+              pointerType: 'mouse',
+              clientX: rect.left + 64,
+              clientY: rect.top + 72,
+              button: 0,
+              buttons: 1
+            })
+          );
+          canvas.dispatchEvent(
+            new MouseEvent('mousedown', {
+              bubbles: true,
+              cancelable: true,
+              clientX: rect.left + 64,
+              clientY: rect.top + 72,
+              button: 0,
+              buttons: 1
+            })
+          );
+          Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            value: 'hidden'
+          });
+          document.dispatchEvent(new Event('visibilitychange'));
+        }, { pointerId });
+      }
+    },
+    {
+      name: 'pointerup-before-capture-loss',
+      async run(page, pointerId) {
+        await page.evaluate(({ pointerId: id }) => {
+          const canvas = document.querySelector('[data-testid="wasm-client-canvas"]');
+          const rect = canvas.getBoundingClientRect();
+          const eventInit = {
+            bubbles: true,
+            cancelable: true,
+            pointerId: id,
+            pointerType: 'mouse',
+            clientX: rect.left + 64,
+            clientY: rect.top + 72
+          };
+
+          window.nativeInputCalls = [];
+          canvas.dispatchEvent(new PointerEvent('pointerdown', { ...eventInit, button: 0, buttons: 1 }));
+          canvas.dispatchEvent(new MouseEvent('mousedown', { ...eventInit, button: 0, buttons: 1 }));
+          canvas.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, button: 0, buttons: 0 }));
+          canvas.dispatchEvent(new PointerEvent('pointerup', { ...eventInit, button: 0, buttons: 0 }));
+          canvas.dispatchEvent(new PointerEvent('lostpointercapture', { ...eventInit, button: -1, buttons: 0 }));
+        }, { pointerId });
+      }
+    }
+  ];
+
+  for (const [index, scenario] of scenarios.entries()) {
+    await scenario.run(page, index + 200);
+    const buttonCalls = await page.evaluate(() => window.nativeInputCalls.filter((call) => call.type === 'mouseButton'));
+
+    expect(
+      buttonCalls.map(({ type, x, button, pressed, shift, ctrl, alt }) => ({ type, x, button, pressed, shift, ctrl, alt })),
+      scenario.name
+    ).toEqual([
+      { type: 'mouseButton', x: 64, button: 0, pressed: 1, shift: 0, ctrl: 0, alt: 0 },
+      { type: 'mouseButton', x: 64, button: 0, pressed: 0, shift: 0, ctrl: 0, alt: 0 }
+    ]);
+  }
+});
+
+test('browser host forwards chorded mouse button transitions without pointer double-fire', async ({ page }) => {
+  await installMockWebGpu(page);
+  await routeNativeArtifacts(page);
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Launch' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Launch' }).click();
+  await expect(page.getByTestId('wasm-module-status')).toHaveAttribute('data-module-state', 'running');
+
+  const buttonCalls = await page.evaluate(() => {
+    const canvas = document.querySelector('[data-testid="wasm-client-canvas"]');
+    const rect = canvas.getBoundingClientRect();
+    const eventInit = {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 991,
+      pointerType: 'mouse',
+      clientX: rect.left + 80,
+      clientY: rect.top + 88
+    };
+
+    window.nativeInputCalls = [];
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { ...eventInit, button: 0, buttons: 1 }));
+    canvas.dispatchEvent(new MouseEvent('mousedown', { ...eventInit, button: 0, buttons: 1 }));
+    canvas.dispatchEvent(new MouseEvent('mousedown', { ...eventInit, button: 2, buttons: 3 }));
+    canvas.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, button: 2, buttons: 1 }));
+    canvas.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, button: 0, buttons: 0 }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { ...eventInit, button: 0, buttons: 0 }));
+
+    return window.nativeInputCalls.filter((call) => call.type === 'mouseButton');
+  });
+
+  expect(buttonCalls.map(({ type, x, button, pressed, shift, ctrl, alt }) => ({ type, x, button, pressed, shift, ctrl, alt }))).toEqual([
+    { type: 'mouseButton', x: 80, button: 0, pressed: 1, shift: 0, ctrl: 0, alt: 0 },
+    { type: 'mouseButton', x: 80, button: 2, pressed: 1, shift: 0, ctrl: 0, alt: 0 },
+    { type: 'mouseButton', x: 80, button: 2, pressed: 0, shift: 0, ctrl: 0, alt: 0 },
+    { type: 'mouseButton', x: 80, button: 0, pressed: 0, shift: 0, ctrl: 0, alt: 0 }
+  ]);
+});
+
 test('browser host does not forward launch form text as native input', async ({ page }) => {
   await installMockWebGpu(page);
   await routeNativeArtifacts(page);
@@ -333,6 +629,172 @@ test.describe('WASM input bridge harness', () => {
       finalKeyDownCount: 1
     });
   });
+
+  test('routes native mouse exports into GUI mouse and platform focus paths', async ({ page }) => {
+    await loadInputHarness(page);
+
+    const result = await page.evaluate(({ moum }) => {
+      const harness = window.inputHarness;
+      harness._wasm_input_bridge_harness_reset();
+
+      const initialPlatform = {
+        hasFocus: harness._wasm_input_bridge_harness_platform_has_focus(),
+        checkMouse: harness._wasm_input_bridge_harness_platform_check_mouse()
+      };
+
+      harness._astonia_wasm_input_mouse_focus(1);
+      const focusedPlatform = {
+        hasFocus: harness._wasm_input_bridge_harness_platform_has_focus(),
+        checkMouse: harness._wasm_input_bridge_harness_platform_check_mouse()
+      };
+
+      harness._astonia_wasm_input_mouse_move(12, 34, 0, 0, 1, 0, 0);
+      const move = {
+        count: harness._wasm_input_bridge_harness_mouse_count(),
+        x: harness._wasm_input_bridge_harness_last_mouse_x(),
+        y: harness._wasm_input_bridge_harness_last_mouse_y(),
+        what: harness._wasm_input_bridge_harness_last_mouse_what(),
+        vkShift: harness._wasm_input_bridge_harness_vk_shift(),
+        sdlMods: harness._wasm_input_bridge_harness_sdl_mods()
+      };
+
+      harness._astonia_wasm_input_mouse_button(20, 22, 0, 1, 0, 1, 0);
+      const leftDown = {
+        count: harness._wasm_input_bridge_harness_mouse_count(),
+        x: harness._wasm_input_bridge_harness_last_mouse_x(),
+        y: harness._wasm_input_bridge_harness_last_mouse_y(),
+        what: harness._wasm_input_bridge_harness_last_mouse_what(),
+        vkControl: harness._wasm_input_bridge_harness_vk_control(),
+        sdlMods: harness._wasm_input_bridge_harness_sdl_mods()
+      };
+
+      harness._astonia_wasm_input_mouse_button(20, 22, 0, 0, 0, 0, 1);
+      const leftUp = {
+        count: harness._wasm_input_bridge_harness_mouse_count(),
+        what: harness._wasm_input_bridge_harness_last_mouse_what(),
+        vkAlt: harness._wasm_input_bridge_harness_vk_alt(),
+        sdlMods: harness._wasm_input_bridge_harness_sdl_mods()
+      };
+
+      harness._astonia_wasm_input_mouse_wheel(20, 22, 0, -1, 0, 0, 0);
+      const wheel = {
+        count: harness._wasm_input_bridge_harness_mouse_count(),
+        x: harness._wasm_input_bridge_harness_last_mouse_x(),
+        y: harness._wasm_input_bridge_harness_last_mouse_y(),
+        what: harness._wasm_input_bridge_harness_last_mouse_what()
+      };
+      const bridgeCounters = {
+        eventCount: harness._astonia_wasm_input_mouse_event_count(),
+        moveCount: harness._astonia_wasm_input_mouse_move_count(),
+        downCount: harness._astonia_wasm_input_mouse_button_down_count(),
+        upCount: harness._astonia_wasm_input_mouse_button_up_count(),
+        wheelCount: harness._astonia_wasm_input_mouse_wheel_count(),
+        activeButtons: harness._astonia_wasm_input_mouse_active_buttons(),
+        lastX: harness._astonia_wasm_input_mouse_last_x(),
+        lastY: harness._astonia_wasm_input_mouse_last_y(),
+        lastButton: harness._astonia_wasm_input_mouse_last_button(),
+        lastPressed: harness._astonia_wasm_input_mouse_last_pressed(),
+        lastWhat: harness._astonia_wasm_input_mouse_last_what()
+      };
+
+      harness._wasm_input_bridge_harness_reset();
+      harness._astonia_wasm_input_mouse_focus(1);
+      harness._wasm_input_bridge_harness_platform_capture_request(1);
+      harness._wasm_input_bridge_harness_platform_cursor_warp_request(640, 360);
+      harness._astonia_wasm_input_mouse_move(100, 100, 7, -5, 0, 0, 0);
+      harness._wasm_input_bridge_harness_platform_cursor_request(12);
+      const capturedRecenterMove = {
+        count: harness._wasm_input_bridge_harness_mouse_count(),
+        x: harness._wasm_input_bridge_harness_last_mouse_x(),
+        y: harness._wasm_input_bridge_harness_last_mouse_y(),
+        what: harness._wasm_input_bridge_harness_last_mouse_what(),
+        hasFocus: harness._wasm_input_bridge_harness_platform_has_focus(),
+        cursor: harness._wasm_input_bridge_harness_platform_cursor()
+      };
+
+      harness._astonia_wasm_input_mouse_focus(0);
+      const blurredPlatform = {
+        hasFocus: harness._wasm_input_bridge_harness_platform_has_focus(),
+        checkMouse: harness._wasm_input_bridge_harness_platform_check_mouse()
+      };
+
+      return {
+        initialPlatform,
+        focusedPlatform,
+        move,
+        leftDown,
+        leftUp,
+        wheel,
+        bridgeCounters,
+        capturedRecenterMove,
+        blurredPlatform
+      };
+    }, { moum: SDL_MOUM });
+
+    expect(result).toEqual({
+      initialPlatform: {
+        hasFocus: 0,
+        checkMouse: 1
+      },
+      focusedPlatform: {
+        hasFocus: 1,
+        checkMouse: 0
+      },
+      move: {
+        count: 1,
+        x: 12,
+        y: 34,
+        what: SDL_MOUM.none,
+        vkShift: 1,
+        sdlMods: 1
+      },
+      leftDown: {
+        count: 3,
+        x: 20,
+        y: 22,
+        what: SDL_MOUM.leftDown,
+        vkControl: 1,
+        sdlMods: 2
+      },
+      leftUp: {
+        count: 5,
+        what: SDL_MOUM.leftUp,
+        vkAlt: 1,
+        sdlMods: 4
+      },
+      wheel: {
+        count: 7,
+        x: 0,
+        y: -1,
+        what: SDL_MOUM.wheel
+      },
+      bridgeCounters: {
+        eventCount: 7,
+        moveCount: 4,
+        downCount: 1,
+        upCount: 1,
+        wheelCount: 1,
+        activeButtons: 0,
+        lastX: 0,
+        lastY: -1,
+        lastButton: 0,
+        lastPressed: 0,
+        lastWhat: SDL_MOUM.wheel
+      },
+      capturedRecenterMove: {
+        count: 1,
+        x: 647,
+        y: 355,
+        what: SDL_MOUM.none,
+        hasFocus: 1,
+        cursor: 12
+      },
+      blurredPlatform: {
+        hasFocus: 0,
+        checkMouse: 1
+      }
+    });
+  });
 });
 
 test('production WASM export list contains the input bridge exports', () => {
@@ -342,16 +804,32 @@ test('production WASM export list contains the input bridge exports', () => {
   expect(makefile).toContain('_astonia_wasm_input_key_down');
   expect(makefile).toContain('_astonia_wasm_input_key_up');
   expect(makefile).toContain('_astonia_wasm_input_text');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_focus');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_capture');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_move');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_button');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_wheel');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_event_count');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_move_count');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_button_down_count');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_button_up_count');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_wheel_count');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_active_buttons');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_last_x');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_last_y');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_last_button');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_last_pressed');
+  expect(makefile).toContain('_astonia_wasm_input_mouse_last_what');
 });
 
-test('generated native module exposes input bridge exports', async ({ page }) => {
+test('generated native module records native input counters from a canvas pointer action', async ({ page }) => {
   if (!existsSync(distModulePath)) {
     test.skip(true, 'native WASM module has not been built');
   }
 
   await page.goto('/');
 
-  const missing = await page.evaluate(async () => {
+  const loadResult = await page.evaluate(async () => {
     const imported = await import(`/dist/astonia-client.js?t=${Date.now()}`);
     const createModule = imported.default ?? imported.createAstoniaClientModule;
     const module = await createModule({
@@ -366,11 +844,65 @@ test('generated native module exposes input bridge exports', async ({ page }) =>
       '_astonia_wasm_input_set_modifiers',
       '_astonia_wasm_input_key_down',
       '_astonia_wasm_input_key_up',
-      '_astonia_wasm_input_text'
+      '_astonia_wasm_input_text',
+      '_astonia_wasm_input_mouse_focus',
+      '_astonia_wasm_input_mouse_capture',
+      '_astonia_wasm_input_mouse_move',
+      '_astonia_wasm_input_mouse_button',
+      '_astonia_wasm_input_mouse_wheel',
+      '_astonia_wasm_input_mouse_event_count',
+      '_astonia_wasm_input_mouse_move_count',
+      '_astonia_wasm_input_mouse_button_down_count',
+      '_astonia_wasm_input_mouse_button_up_count',
+      '_astonia_wasm_input_mouse_wheel_count',
+      '_astonia_wasm_input_mouse_active_buttons',
+      '_astonia_wasm_input_mouse_last_x',
+      '_astonia_wasm_input_mouse_last_y',
+      '_astonia_wasm_input_mouse_last_button',
+      '_astonia_wasm_input_mouse_last_pressed',
+      '_astonia_wasm_input_mouse_last_what'
     ];
 
-    return exports.filter((name) => typeof module[name] !== 'function');
+    const missing = exports.filter((name) => typeof module[name] !== 'function');
+    window.astoniaNativeModule = module;
+
+    return {
+      missing,
+      before: {
+        eventCount: module._astonia_wasm_input_mouse_event_count?.(),
+        moveCount: module._astonia_wasm_input_mouse_move_count?.(),
+        activeButtons: module._astonia_wasm_input_mouse_active_buttons?.()
+      }
+    };
   });
 
-  expect(missing).toEqual([]);
+  expect(loadResult.missing).toEqual([]);
+
+  const canvas = page.getByTestId('wasm-client-canvas');
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+
+  await page.mouse.move(box.x + 90, box.y + 104);
+
+  const after = await page.evaluate(() => {
+    const module = window.astoniaNativeModule;
+
+    return {
+      eventCount: module._astonia_wasm_input_mouse_event_count(),
+      moveCount: module._astonia_wasm_input_mouse_move_count(),
+      activeButtons: module._astonia_wasm_input_mouse_active_buttons(),
+      lastX: module._astonia_wasm_input_mouse_last_x(),
+      lastY: module._astonia_wasm_input_mouse_last_y(),
+      lastWhat: module._astonia_wasm_input_mouse_last_what()
+    };
+  });
+
+  expect(after).toEqual({
+    eventCount: loadResult.before.eventCount + 1,
+    moveCount: loadResult.before.moveCount + 1,
+    activeButtons: 0,
+    lastX: 90,
+    lastY: 104,
+    lastWhat: SDL_MOUM.none
+  });
 });

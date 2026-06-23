@@ -2,8 +2,8 @@
  * Part of Astonia Client (c) Daniel Brockhaus. Please read license.txt.
  *
  * Link-safe WASM shell for the SDL platform surface that is not owned by the
- * current Sokol renderer bridge. This is intentionally not final input,
- * cursor, capture, focus, or background loading behavior.
+ * current Sokol renderer bridge. Browser mouse focus/capture/cursor facts are
+ * supplied through the WASM input bridge; native GUI code still owns semantics.
  */
 
 #if !defined(__EMSCRIPTEN__)
@@ -23,6 +23,7 @@
 #include "sdl/sdl.h"
 #include "sdl/sdl_private.h"
 #include "sdl/sdl_state.h"
+#include "wasm/wasm_input_bridge.h"
 
 #define ASTONIA_WASM_TEXTURE_CPU_JOBS_PER_FRAME 1
 #define ASTONIA_WASM_TEXTURE_GPU_UPLOADS_PER_FRAME 2
@@ -151,23 +152,22 @@ bool sdl_is_shown(void)
 
 bool sdl_has_focus(void)
 {
-	return true;
+	return astonia_wasm_input_platform_has_focus() ? true : false;
 }
 
 void sdl_set_cursor_pos(int x, int y)
 {
-	(void)x;
-	(void)y;
+	astonia_wasm_input_platform_cursor_warp_request(x, y);
 }
 
 void sdl_capture_mouse(int flag)
 {
-	(void)flag;
+	astonia_wasm_input_platform_capture_request(flag);
 }
 
 void sdl_set_cursor(int cursor)
 {
-	(void)cursor;
+	astonia_wasm_input_platform_cursor_request(cursor);
 }
 
 SDL_Cursor *sdl_create_cursor(char *filename)
@@ -214,7 +214,7 @@ void sdl_flush_textinput(void)
 
 int sdl_check_mouse(void)
 {
-	return 0;
+	return astonia_wasm_input_platform_check_mouse();
 }
 
 void sdl_pre_add(unsigned int sprite, signed char sink, unsigned char freeze, unsigned char scale, char cr, char cg,

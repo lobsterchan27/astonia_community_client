@@ -161,6 +161,9 @@ let launchSequence = 0;
 let audioContext = null;
 let audioState = 'unavailable';
 let audioUnlockAttempt = null;
+const capturedPointerIds = new Set();
+const activePointerButtons = new Map();
+let activeMousePointerId = null;
 
 const LAUNCH_PROBE_PREFIX = '[DEBUG-wasm-launch-probe]';
 
@@ -382,7 +385,7 @@ function reportNativeAudioState(module) {
 }
 
 function activeNativeInputModule() {
-  return launchOwner?.module ?? null;
+  return launchOwner?.module ?? window.astoniaNativeModule ?? null;
 }
 
 function eventModifiers(event) {
@@ -491,6 +494,243 @@ function forwardNativeText(event) {
   reportNativeModifiers(module, modifiers);
   nativeInput(characters[0].codePointAt(0), modifiers.shift, modifiers.ctrl, modifiers.alt);
 
+  if (event.cancelable) {
+    event.preventDefault();
+  }
+}
+
+function canvasNativePosition(event) {
+  const rect = elements.canvas.getBoundingClientRect();
+  const scaleX = rect.width > 0 ? elements.canvas.width / rect.width : 1;
+  const scaleY = rect.height > 0 ? elements.canvas.height / rect.height : 1;
+
+  return {
+    x: Math.round((event.clientX - rect.left) * scaleX),
+    y: Math.round((event.clientY - rect.top) * scaleY),
+    movementX: Math.round((event.movementX ?? 0) * scaleX),
+    movementY: Math.round((event.movementY ?? 0) * scaleY)
+  };
+}
+
+function reportNativeMouseFocus(focused) {
+  const report = activeNativeInputModule()?._astonia_wasm_input_mouse_focus;
+  if (typeof report === 'function') {
+    report(focused ? 1 : 0);
+  }
+}
+
+function reportNativeMouseCapture(captured) {
+  const report = activeNativeInputModule()?._astonia_wasm_input_mouse_capture;
+  if (typeof report === 'function') {
+    report(captured ? 1 : 0);
+  }
+}
+
+function pointerId(event) {
+  return Number.isFinite(event.pointerId) ? event.pointerId : 0;
+}
+
+function activeButtonPointerId(event) {
+  return Number.isFinite(event.pointerId) ? event.pointerId : activeMousePointerId ?? 0;
+}
+
+function emptyModifiers() {
+  return { shift: 0, ctrl: 0, alt: 0 };
+}
+
+function updateActivePointerPosition(event, position, modifiers) {
+  const state = activePointerButtons.get(pointerId(event));
+  if (!state) {
+    return;
+  }
+
+  state.position = position;
+  state.modifiers = modifiers;
+}
+
+function rememberActivePointerButton(event, position, modifiers, id = activeButtonPointerId(event)) {
+  if (!Number.isInteger(event.button) || event.button < 0) {
+    return;
+  }
+
+  const state =
+    activePointerButtons.get(id) ??
+    {
+      buttons: new Set(),
+      position,
+      modifiers
+    };
+
+  state.position = position;
+  state.modifiers = modifiers;
+  state.buttons.add(event.button);
+  activePointerButtons.set(id, state);
+}
+
+function forgetActivePointerButton(event, id = activeButtonPointerId(event)) {
+  const state = activePointerButtons.get(id);
+  if (!state || !Number.isInteger(event.button) || event.button < 0) {
+    return false;
+  }
+
+  const hadButton = state.buttons.has(event.button);
+  state.buttons.delete(event.button);
+  if (state.buttons.size === 0) {
+    activePointerButtons.delete(id);
+  }
+  return hadButton;
+}
+
+function synthesizeNativeButtonReleases(pointerIdToRelease = null) {
+  const module = activeNativeInputModule();
+  const nativeInput = module?._astonia_wasm_input_mouse_button;
+  const entries =
+    pointerIdToRelease === null
+      ? Array.from(activePointerButtons.entries())
+      : activePointerButtons.has(pointerIdToRelease)
+        ? [[pointerIdToRelease, activePointerButtons.get(pointerIdToRelease)]]
+        : [];
+
+  for (const [id, state] of entries) {
+    const position = state.position ?? { x: 0, y: 0 };
+    const modifiers = state.modifiers ?? emptyModifiers();
+
+    if (typeof nativeInput === 'function') {
+      reportNativeModifiers(module, modifiers);
+      reportNativeMouseFocus(true);
+      for (const button of state.buttons) {
+        nativeInput(position.x, position.y, button, 0, modifiers.shift, modifiers.ctrl, modifiers.alt);
+      }
+    }
+
+    activePointerButtons.delete(id);
+  }
+}
+
+function capturePointerFromGesture(event) {
+  if (event.pointerType === 'mouse') {
+    activeMousePointerId = pointerId(event);
+  }
+
+  if (typeof elements.canvas.setPointerCapture !== 'function') {
+    return;
+  }
+
+  try {
+    elements.canvas.setPointerCapture(event.pointerId);
+    capturedPointerIds.add(pointerId(event));
+    reportNativeMouseCapture(true);
+  } catch {
+    capturedPointerIds.delete(pointerId(event));
+    reportNativeMouseCapture(capturedPointerIds.size > 0);
+  }
+}
+
+function releasePointerCapture(event) {
+  const id = pointerId(event);
+
+  if (typeof elements.canvas.releasePointerCapture !== 'function') {
+    capturedPointerIds.delete(id);
+    reportNativeMouseCapture(capturedPointerIds.size > 0);
+    return;
+  }
+
+  try {
+    if (elements.canvas.hasPointerCapture?.(event.pointerId)) {
+      elements.canvas.releasePointerCapture(event.pointerId);
+    }
+  } catch {
+    // Pointer capture can already be gone after browser cancellation.
+  }
+  capturedPointerIds.delete(id);
+  reportNativeMouseCapture(capturedPointerIds.size > 0);
+}
+
+function cleanupPointer(event) {
+  synthesizeNativeButtonReleases(pointerId(event));
+  releasePointerCapture(event);
+  if (activeMousePointerId === pointerId(event)) {
+    activeMousePointerId = null;
+  }
+}
+
+function cleanupAllPointers() {
+  synthesizeNativeButtonReleases();
+  capturedPointerIds.clear();
+  activeMousePointerId = null;
+  reportNativeMouseCapture(false);
+  reportNativeMouseFocus(false);
+}
+
+function mousePointerEventOwnsButtonTransitions(event) {
+  return event.pointerType === 'mouse';
+}
+
+function forwardNativePointerMove(event) {
+  const module = activeNativeInputModule();
+  const nativeInput = module?._astonia_wasm_input_mouse_move;
+  if (typeof nativeInput !== 'function') {
+    return;
+  }
+
+  const position = canvasNativePosition(event);
+  const modifiers = eventModifiers(event);
+  reportNativeModifiers(module, modifiers);
+  reportNativeMouseFocus(true);
+  updateActivePointerPosition(event, position, modifiers);
+  nativeInput(position.x, position.y, position.movementX, position.movementY, modifiers.shift, modifiers.ctrl, modifiers.alt);
+  if (event.cancelable) {
+    event.preventDefault();
+  }
+}
+
+function forwardNativePointerButton(event, pressed, id = activeButtonPointerId(event)) {
+  const module = activeNativeInputModule();
+  const nativeInput = module?._astonia_wasm_input_mouse_button;
+  if (typeof nativeInput !== 'function') {
+    return false;
+  }
+
+  if (!pressed && !activePointerButtons.get(id)?.buttons.has(event.button)) {
+    return false;
+  }
+
+  const position = canvasNativePosition(event);
+  const modifiers = eventModifiers(event);
+  reportNativeModifiers(module, modifiers);
+  reportNativeMouseFocus(true);
+  nativeInput(position.x, position.y, event.button, pressed ? 1 : 0, modifiers.shift, modifiers.ctrl, modifiers.alt);
+  if (pressed) {
+    rememberActivePointerButton(event, position, modifiers, id);
+  } else {
+    forgetActivePointerButton(event, id);
+  }
+  if (event.cancelable) {
+    event.preventDefault();
+  }
+  return true;
+}
+
+function forwardNativeMouseButton(event, pressed) {
+  const id = activeMousePointerId ?? 0;
+  return forwardNativePointerButton(event, pressed, id);
+}
+
+function forwardNativeWheel(event) {
+  const module = activeNativeInputModule();
+  const nativeInput = module?._astonia_wasm_input_mouse_wheel;
+  if (typeof nativeInput !== 'function') {
+    return;
+  }
+
+  const position = canvasNativePosition(event);
+  const modifiers = eventModifiers(event);
+  const wheelX = event.deltaX < 0 ? 1 : event.deltaX > 0 ? -1 : 0;
+  const wheelY = event.deltaY < 0 ? 1 : event.deltaY > 0 ? -1 : 0;
+
+  reportNativeModifiers(module, modifiers);
+  reportNativeMouseFocus(true);
+  nativeInput(position.x, position.y, wheelX, wheelY, modifiers.shift, modifiers.ctrl, modifiers.alt);
   if (event.cancelable) {
     event.preventDefault();
   }
@@ -840,6 +1080,56 @@ function initializeForm() {
   window.addEventListener('keydown', (event) => forwardNativeKey(event, '_astonia_wasm_input_key_down'));
   window.addEventListener('keyup', (event) => forwardNativeKey(event, '_astonia_wasm_input_key_up'));
   window.addEventListener('keypress', forwardNativeText);
+  elements.canvas.addEventListener('pointerenter', () => reportNativeMouseFocus(true));
+  elements.canvas.addEventListener('pointerleave', () => {
+    if (capturedPointerIds.size === 0) {
+      reportNativeMouseFocus(false);
+    }
+  });
+  elements.canvas.addEventListener('pointermove', forwardNativePointerMove);
+  elements.canvas.addEventListener('pointerdown', (event) => {
+    capturePointerFromGesture(event);
+    if (!mousePointerEventOwnsButtonTransitions(event)) {
+      forwardNativePointerButton(event, true);
+    }
+  });
+  elements.canvas.addEventListener('pointerup', (event) => {
+    if (!mousePointerEventOwnsButtonTransitions(event)) {
+      forwardNativePointerButton(event, false);
+      releasePointerCapture(event);
+    }
+  });
+  elements.canvas.addEventListener('mousedown', (event) => {
+    forwardNativeMouseButton(event, true);
+  });
+  elements.canvas.addEventListener('mouseup', (event) => {
+    const id = activeMousePointerId;
+
+    forwardNativeMouseButton(event, false);
+    if (event.buttons === 0 && id !== null && !activePointerButtons.has(id)) {
+      releasePointerCapture({ pointerId: id });
+      if (activeMousePointerId === id) {
+        activeMousePointerId = null;
+      }
+    }
+  });
+  elements.canvas.addEventListener('pointercancel', cleanupPointer);
+  elements.canvas.addEventListener('lostpointercapture', (event) => {
+    synthesizeNativeButtonReleases(pointerId(event));
+    capturedPointerIds.delete(pointerId(event));
+    if (activeMousePointerId === pointerId(event)) {
+      activeMousePointerId = null;
+    }
+    reportNativeMouseCapture(capturedPointerIds.size > 0);
+  });
+  elements.canvas.addEventListener('wheel', forwardNativeWheel, { passive: false });
+  elements.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+  window.addEventListener('blur', cleanupAllPointers);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      cleanupAllPointers();
+    }
+  });
   updateAudioStatusFromPlatform();
 }
 
