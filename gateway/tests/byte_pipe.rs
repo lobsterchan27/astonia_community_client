@@ -125,6 +125,70 @@ fn requested_allowed_target_port_connects_to_that_tcp_backend() {
 }
 
 #[test]
+fn defers_tcp_connect_until_first_websocket_payload() {
+    let tcp_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let tcp_addr = tcp_listener.local_addr().unwrap();
+    let (tcp_accepted_tx, tcp_accepted_rx) = mpsc::channel();
+    let (tcp_received_tx, tcp_received_rx) = mpsc::channel();
+
+    let tcp_server = thread::spawn(move || {
+        let (mut stream, _) = tcp_listener.accept().unwrap();
+        tcp_accepted_tx.send(()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+
+        let mut received = vec![0; 4];
+        stream.read_exact(&mut received).unwrap();
+        tcp_received_tx.send(received).unwrap();
+    });
+
+    let gateway_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let gateway_addr = gateway_listener.local_addr().unwrap();
+    let shutdown = Shutdown::new();
+    let gateway_shutdown = shutdown.clone();
+    let gateway = thread::spawn(move || {
+        serve(
+            gateway_listener,
+            GatewayConfig {
+                tcp_host: "127.0.0.1".to_owned(),
+                tcp_port: tcp_addr.port(),
+                target_port_allow_start: tcp_addr.port(),
+                target_port_allow_end: tcp_addr.port(),
+            },
+            gateway_shutdown,
+        )
+        .unwrap();
+    });
+
+    let (mut websocket, _) = connect(format!("ws://{gateway_addr}")).unwrap();
+    assert!(
+        tcp_accepted_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "gateway connected to TCP before the browser sent its first payload"
+    );
+
+    thread::sleep(Duration::from_millis(100));
+    let client_payload = vec![0xde, 0xad, 0xbe, 0xef];
+    websocket
+        .send(Message::Binary(client_payload.clone().into()))
+        .unwrap();
+
+    assert_eq!(
+        tcp_received_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap(),
+        client_payload
+    );
+
+    shutdown.request();
+    drop(websocket);
+    gateway.join().unwrap();
+    tcp_server.join().unwrap();
+}
+
+#[test]
 fn disallowed_requested_target_port_is_rejected_before_tcp_connect() {
     let default_tcp_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let default_tcp_addr = default_tcp_listener.local_addr().unwrap();
@@ -201,6 +265,7 @@ fn closes_websocket_when_tcp_server_closes() {
     });
 
     let (mut websocket, _) = connect(format!("ws://{gateway_addr}")).unwrap();
+    websocket.send(Message::Binary(vec![0x01].into())).unwrap();
     tcp_accepted_rx
         .recv_timeout(Duration::from_secs(2))
         .unwrap();
@@ -219,6 +284,7 @@ fn closes_tcp_connection_when_websocket_client_closes() {
     let tcp_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let tcp_addr = tcp_listener.local_addr().unwrap();
     let (tcp_accepted_tx, tcp_accepted_rx) = mpsc::channel();
+    let (tcp_first_byte_tx, tcp_first_byte_rx) = mpsc::channel();
     let (tcp_read_tx, tcp_read_rx) = mpsc::channel();
 
     let tcp_server = thread::spawn(move || {
@@ -226,6 +292,9 @@ fn closes_tcp_connection_when_websocket_client_closes() {
         tcp_accepted_tx.send(()).unwrap();
 
         let mut byte = [0_u8; 1];
+        stream.read_exact(&mut byte).unwrap();
+        tcp_first_byte_tx.send(byte[0]).unwrap();
+
         let read = stream.read(&mut byte).unwrap();
         tcp_read_tx.send(read).unwrap();
     });
@@ -249,9 +318,16 @@ fn closes_tcp_connection_when_websocket_client_closes() {
     });
 
     let (mut websocket, _) = connect(format!("ws://{gateway_addr}")).unwrap();
+    websocket.send(Message::Binary(vec![0x7d].into())).unwrap();
     tcp_accepted_rx
         .recv_timeout(Duration::from_secs(2))
         .unwrap();
+    assert_eq!(
+        tcp_first_byte_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap(),
+        0x7d
+    );
 
     websocket.close(None).unwrap();
 
@@ -288,6 +364,7 @@ fn closes_websocket_when_tcp_target_refuses_connection() {
     });
 
     let (mut websocket, _) = connect(format!("ws://{gateway_addr}")).unwrap();
+    websocket.send(Message::Binary(vec![0x33].into())).unwrap();
 
     let close = websocket.read().unwrap();
     assert!(close.is_close(), "expected WebSocket close, got {close:?}");
@@ -302,6 +379,7 @@ fn closes_tcp_connection_when_websocket_connection_disappears() {
     let tcp_listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let tcp_addr = tcp_listener.local_addr().unwrap();
     let (tcp_accepted_tx, tcp_accepted_rx) = mpsc::channel();
+    let (tcp_first_byte_tx, tcp_first_byte_rx) = mpsc::channel();
     let (tcp_read_tx, tcp_read_rx) = mpsc::channel();
 
     let tcp_server = thread::spawn(move || {
@@ -309,6 +387,9 @@ fn closes_tcp_connection_when_websocket_connection_disappears() {
         tcp_accepted_tx.send(()).unwrap();
 
         let mut byte = [0_u8; 1];
+        stream.read_exact(&mut byte).unwrap();
+        tcp_first_byte_tx.send(byte[0]).unwrap();
+
         let read = stream.read(&mut byte).unwrap();
         tcp_read_tx.send(read).unwrap();
     });
@@ -331,10 +412,17 @@ fn closes_tcp_connection_when_websocket_connection_disappears() {
         .unwrap();
     });
 
-    let (websocket, _) = connect(format!("ws://{gateway_addr}")).unwrap();
+    let (mut websocket, _) = connect(format!("ws://{gateway_addr}")).unwrap();
+    websocket.send(Message::Binary(vec![0x5a].into())).unwrap();
     tcp_accepted_rx
         .recv_timeout(Duration::from_secs(2))
         .unwrap();
+    assert_eq!(
+        tcp_first_byte_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap(),
+        0x5a
+    );
 
     drop(websocket);
 

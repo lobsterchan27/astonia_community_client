@@ -73,21 +73,12 @@ fn handle_client(client: TcpStream, config: GatewayConfig) -> io::Result<()> {
         Ok(response)
     })
     .map_err(|err| io::Error::other(err.to_string()))?;
-    let mut tcp = match TcpStream::connect((config.tcp_host.as_str(), selected_tcp_port)) {
-        Ok(tcp) => tcp,
-        Err(err) => {
-            close_websocket(&mut websocket)?;
-            return Err(err);
-        }
-    };
-    tcp.set_nodelay(true)?;
-    tcp.set_read_timeout(Some(IO_POLL_INTERVAL))?;
-    tcp.set_write_timeout(Some(WRITE_TIMEOUT))?;
     websocket
         .get_mut()
         .set_read_timeout(Some(IO_POLL_INTERVAL))?;
     websocket.get_mut().set_write_timeout(Some(WRITE_TIMEOUT))?;
 
+    let mut tcp = None;
     let mut tcp_buffer = [0_u8; BUFFER_SIZE];
 
     loop {
@@ -95,16 +86,20 @@ fn handle_client(client: TcpStream, config: GatewayConfig) -> io::Result<()> {
 
         match websocket.read() {
             Ok(Message::Binary(bytes)) => {
+                let tcp =
+                    ensure_tcp_connected(&mut tcp, &config, selected_tcp_port, &mut websocket)?;
                 tcp.write_all(&bytes)?;
                 did_work = true;
             }
             Ok(Message::Text(text)) => {
+                let tcp =
+                    ensure_tcp_connected(&mut tcp, &config, selected_tcp_port, &mut websocket)?;
                 tcp.write_all(text.as_bytes())?;
                 did_work = true;
             }
             Ok(Message::Close(frame)) => {
                 let _ = websocket.close(frame);
-                let _ = tcp.shutdown(TcpShutdown::Both);
+                shutdown_tcp(&mut tcp);
                 return Ok(());
             }
             Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {
@@ -114,36 +109,69 @@ fn handle_client(client: TcpStream, config: GatewayConfig) -> io::Result<()> {
             Ok(Message::Frame(_)) => {}
             Err(WebSocketError::Io(err)) if is_transient_io(&err) => {}
             Err(WebSocketError::ConnectionClosed | WebSocketError::AlreadyClosed) => {
-                let _ = tcp.shutdown(TcpShutdown::Both);
+                shutdown_tcp(&mut tcp);
                 return Ok(());
             }
             Err(err) => {
-                let _ = tcp.shutdown(TcpShutdown::Both);
+                shutdown_tcp(&mut tcp);
                 return Err(to_io_error(err));
             }
         }
 
-        match tcp.read(&mut tcp_buffer) {
-            Ok(0) => {
-                close_websocket(&mut websocket)?;
-                return Ok(());
-            }
-            Ok(read) => {
-                websocket
-                    .send(Message::binary(tcp_buffer[..read].to_vec()))
-                    .map_err(to_io_error)?;
-                did_work = true;
-            }
-            Err(err) if is_transient_io(&err) => {}
-            Err(err) => {
-                close_websocket(&mut websocket)?;
-                return Err(err);
+        if let Some(tcp) = tcp.as_mut() {
+            match tcp.read(&mut tcp_buffer) {
+                Ok(0) => {
+                    close_websocket(&mut websocket)?;
+                    return Ok(());
+                }
+                Ok(read) => {
+                    websocket
+                        .send(Message::binary(tcp_buffer[..read].to_vec()))
+                        .map_err(to_io_error)?;
+                    did_work = true;
+                }
+                Err(err) if is_transient_io(&err) => {}
+                Err(err) => {
+                    close_websocket(&mut websocket)?;
+                    return Err(err);
+                }
             }
         }
 
         if !did_work {
             thread::sleep(IO_POLL_INTERVAL);
         }
+    }
+}
+
+fn ensure_tcp_connected<'a>(
+    tcp: &'a mut Option<TcpStream>,
+    config: &GatewayConfig,
+    selected_tcp_port: u16,
+    websocket: &mut tungstenite::WebSocket<TcpStream>,
+) -> io::Result<&'a mut TcpStream> {
+    if tcp.is_none() {
+        let stream = match TcpStream::connect((config.tcp_host.as_str(), selected_tcp_port)) {
+            Ok(stream) => stream,
+            Err(err) => {
+                close_websocket(websocket)?;
+                return Err(err);
+            }
+        };
+        stream.set_nodelay(true)?;
+        stream.set_read_timeout(Some(IO_POLL_INTERVAL))?;
+        stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+        *tcp = Some(stream);
+    }
+
+    Ok(tcp
+        .as_mut()
+        .expect("TCP stream is connected before returning"))
+}
+
+fn shutdown_tcp(tcp: &mut Option<TcpStream>) {
+    if let Some(tcp) = tcp.as_mut() {
+        let _ = tcp.shutdown(TcpShutdown::Both);
     }
 }
 
