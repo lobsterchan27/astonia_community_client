@@ -106,7 +106,9 @@ int astonia_wasm_platform_shell_init(int width, int height)
 {
 	sdl_multi = 0;
 	SDL_SetAtomicInt(&worker_quit, 0);
+	tex_jobs_init();
 	if (!sdl_native_state_init(width, height)) {
+		tex_jobs_shutdown();
 		return 0;
 	}
 
@@ -114,6 +116,7 @@ int astonia_wasm_platform_shell_init(int width, int height)
 	if (!sdl_zip1) {
 		close_sprite_archives();
 		sdl_native_state_shutdown();
+		tex_jobs_shutdown();
 		return 0;
 	}
 	return 1;
@@ -122,6 +125,7 @@ int astonia_wasm_platform_shell_init(int width, int height)
 void astonia_wasm_platform_shell_shutdown(void)
 {
 	sdl_native_state_shutdown();
+	tex_jobs_shutdown();
 	close_sprite_archives();
 	SDL_SetAtomicInt(&worker_quit, 1);
 	worker_threads = NULL;

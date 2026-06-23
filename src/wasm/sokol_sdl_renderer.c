@@ -103,6 +103,7 @@ DLL_EXPORT int astonia_wasm_native_state_check(void)
 	return snapshot.initialized && snapshot.cache_best == 0 && snapshot.cache_last == MAX_TEXCACHE - 1 &&
 	       snapshot.cache_empty_heads == MAX_TEXHASH && snapshot.first_prev == STX_NONE && snapshot.first_next == 1 &&
 	       snapshot.first_generation == 1 && snapshot.first_work_state == TX_WORK_IDLE && snapshot.last_next == STX_NONE &&
+	       snapshot.texture_jobs_mutex_ready && snapshot.texture_jobs_cond_ready && snapshot.texture_jobs_count == 0 &&
 	       snapshot.gx1_zip_ready && snapshot.gx1_probe_sprite_ready
 	           ? 0
 	           : 1;

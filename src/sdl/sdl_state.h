@@ -151,6 +151,9 @@ typedef struct sdl_native_state_snapshot {
 	int first_work_state;
 	int last_prev;
 	int last_next;
+	int texture_jobs_mutex_ready;
+	int texture_jobs_cond_ready;
+	int texture_jobs_count;
 	int image_state_zero;
 	int gx1_zip_ready;
 	int gx1_probe_sprite_ready;

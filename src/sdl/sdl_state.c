@@ -376,6 +376,13 @@ int sdl_native_resource_probe_sprite(unsigned int sprite)
 
 int sdl_native_state_init(int width, int height)
 {
+	if (!g_tex_jobs.mutex || !g_tex_jobs.cond) {
+		g_native_state_initialized = 0;
+		g_gx1_zip_ready = 0;
+		g_gx1_probe_sprite_ready = 0;
+		return 0;
+	}
+
 	sdl_native_state_configure_frame(width, height, NULL, NULL);
 	sdl_native_state_reset_cache();
 	g_gx1_zip_ready = zip_has_magic("res/gx1.zip");
@@ -433,6 +440,9 @@ void sdl_native_state_snapshot(SdlNativeStateSnapshot *snapshot)
 	snapshot->first_work_state = (int)work_state_load(&sdlt[0]);
 	snapshot->last_prev = sdlt[MAX_TEXCACHE - 1].prev;
 	snapshot->last_next = sdlt[MAX_TEXCACHE - 1].next;
+	snapshot->texture_jobs_mutex_ready = g_tex_jobs.mutex != NULL;
+	snapshot->texture_jobs_cond_ready = g_tex_jobs.cond != NULL;
+	snapshot->texture_jobs_count = g_tex_jobs.count;
 	snapshot->image_state_zero = sdli_state[0];
 	snapshot->gx1_zip_ready = g_gx1_zip_ready;
 	snapshot->gx1_probe_sprite_ready = g_gx1_probe_sprite_ready;
