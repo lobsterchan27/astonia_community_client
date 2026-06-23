@@ -118,9 +118,14 @@ export function collectPageEvidence(page, { consoleLimit = 500 } = {}) {
   return { consoleMessages, pageErrors };
 }
 
-export async function installAttributionProbe(page, { maxSamples = 1000, timerIntervalMs = 100 } = {}) {
+export async function installAttributionProbe(page, { maxSamples = 1000, timerIntervalMs = 100, wrapWebGpu = true } = {}) {
   await page.addInitScript(
-    ({ maxSamples: probeMaxSamples, timerIntervalMs: probeTimerIntervalMs, nativeGetterGroups: getterGroups }) => {
+    ({
+      maxSamples: probeMaxSamples,
+      timerIntervalMs: probeTimerIntervalMs,
+      nativeGetterGroups: getterGroups,
+      wrapWebGpu: probeWrapWebGpu
+    }) => {
       const nowMs = () => Number(performance.now().toFixed(3));
       const push = (values, value) => {
         values.push(value);
@@ -409,55 +414,59 @@ export async function installAttributionProbe(page, { maxSamples = 1000, timerIn
         });
       };
 
-      try {
-        const nativeGpu = navigator.gpu;
-        if (nativeGpu) {
-          const wrappedGpu = wrapGpu(nativeGpu);
-          Object.defineProperty(Navigator.prototype, 'gpu', {
-            configurable: true,
-            get() {
-              return wrappedGpu;
+      if (probeWrapWebGpu) {
+        try {
+          const nativeGpu = navigator.gpu;
+          if (nativeGpu) {
+            const wrappedGpu = wrapGpu(nativeGpu);
+            Object.defineProperty(Navigator.prototype, 'gpu', {
+              configurable: true,
+              get() {
+                return wrappedGpu;
+              }
+            });
+          } else {
+            window.astoniaAttributionRecordWebGpu('navigator-gpu-unavailable', {});
+          }
+        } catch (error) {
+          window.astoniaAttributionRecordWebGpu('navigator-gpu-wrap-error', {
+            message: error instanceof Error ? error.message : String(error)
+          });
+        }
+
+        const nativeGetContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function getContext(type, ...args) {
+          const context = nativeGetContext.call(this, type, ...args);
+          if (type !== 'webgpu' || !context || typeof context !== 'object') {
+            return context;
+          }
+          window.astoniaAttributionRecordWebGpu('canvas-webgpu-context', {
+            width: this.width,
+            height: this.height
+          });
+          return new Proxy(context, {
+            get(target, prop, receiver) {
+              if (prop === 'configure' && typeof target.configure === 'function') {
+                return (...configureArgs) => {
+                  window.astoniaAttributionRecordWebGpu('surface-configure', {});
+                  return target.configure.apply(target, configureArgs);
+                };
+              }
+              if (prop === 'getCurrentTexture' && typeof target.getCurrentTexture === 'function') {
+                return (...textureArgs) => {
+                  window.astoniaAttributionRecordWebGpu('surface-current-texture', {});
+                  return target.getCurrentTexture.apply(target, textureArgs);
+                };
+              }
+              return Reflect.get(target, prop, receiver);
             }
           });
-        } else {
-          window.astoniaAttributionRecordWebGpu('navigator-gpu-unavailable', {});
-        }
-      } catch (error) {
-        window.astoniaAttributionRecordWebGpu('navigator-gpu-wrap-error', {
-          message: error instanceof Error ? error.message : String(error)
-        });
+        };
+      } else {
+        window.astoniaAttributionRecordWebGpu('navigator-gpu-wrap-skipped', {});
       }
-
-      const nativeGetContext = HTMLCanvasElement.prototype.getContext;
-      HTMLCanvasElement.prototype.getContext = function getContext(type, ...args) {
-        const context = nativeGetContext.call(this, type, ...args);
-        if (type !== 'webgpu' || !context || typeof context !== 'object') {
-          return context;
-        }
-        window.astoniaAttributionRecordWebGpu('canvas-webgpu-context', {
-          width: this.width,
-          height: this.height
-        });
-        return new Proxy(context, {
-          get(target, prop, receiver) {
-            if (prop === 'configure' && typeof target.configure === 'function') {
-              return (...configureArgs) => {
-                window.astoniaAttributionRecordWebGpu('surface-configure', {});
-                return target.configure.apply(target, configureArgs);
-              };
-            }
-            if (prop === 'getCurrentTexture' && typeof target.getCurrentTexture === 'function') {
-              return (...textureArgs) => {
-                window.astoniaAttributionRecordWebGpu('surface-current-texture', {});
-                return target.getCurrentTexture.apply(target, textureArgs);
-              };
-            }
-            return Reflect.get(target, prop, receiver);
-          }
-        });
-      };
     },
-    { maxSamples, timerIntervalMs, nativeGetterGroups }
+    { maxSamples, timerIntervalMs, nativeGetterGroups, wrapWebGpu }
   );
 }
 
